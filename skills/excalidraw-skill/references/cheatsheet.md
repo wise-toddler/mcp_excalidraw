@@ -2,10 +2,10 @@
 
 ## Defaults
 
-- Canvas base URL: `EXPRESS_SERVER_URL` (default `http://localhost:3000`)
+- Canvas base URL: `EXPRESS_SERVER_URL` (set by `launch.sh` automatically)
 - Canvas health: `GET /health`
 
-## MCP Tools (26 total)
+## MCP Tools (27 total)
 
 ### Element CRUD
 
@@ -66,6 +66,12 @@
 | Tool | Description | Required params |
 |------|-------------|-----------------|
 | `read_diagram_guide` | Get design best practices (colors, sizing, layout, anti-patterns) | (none) |
+
+### Session
+
+| Tool | Description | Required params |
+|------|-------------|-----------------|
+| `get_canvas_url` | Get the canvas URL for this session | (none) |
 
 ### Conversion
 

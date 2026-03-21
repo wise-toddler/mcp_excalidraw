@@ -1,26 +1,37 @@
 ---
 name: excalidraw-skill
-description: Programmatic canvas toolkit for creating, editing, and refining Excalidraw diagrams via MCP tools with real-time canvas sync. Use when an agent needs to (1) draw or lay out diagrams on a live canvas, (2) iteratively refine diagrams using describe_scene and get_canvas_screenshot to see its own work, (3) export/import .excalidraw files or PNG/SVG images, (4) save/restore canvas snapshots, (5) convert Mermaid to Excalidraw, or (6) perform element-level CRUD, alignment, distribution, grouping, duplication, and locking. Requires a running canvas server (EXPRESS_SERVER_URL, default http://localhost:3000).
+description: Programmatic canvas toolkit for creating, editing, and refining Excalidraw diagrams via MCP tools with real-time canvas sync. Use when an agent needs to (1) draw or lay out diagrams on a live canvas, (2) iteratively refine diagrams using describe_scene and get_canvas_screenshot to see its own work, (3) export/import .excalidraw files or PNG/SVG images, (4) save/restore canvas snapshots, (5) convert Mermaid to Excalidraw, or (6) perform element-level CRUD, alignment, distribution, grouping, duplication, and locking. Auto-sets up canvas server via launch.sh if not running.
 ---
 
 # Excalidraw Skill
 
-## Step 0: Determine Connection Mode
+## Step 0: Auto-Setup & Connection
 
-Two modes are available. Try MCP first — it has more capabilities.
+Run these checks in order. Stop at the first one that works.
 
-**MCP mode** (preferred): If `excalidraw/batch_create_elements` and other `excalidraw/*` tools appear in your tool list, use them directly. MCP tools handle label and arrow binding format automatically.
+**Check 1 — MCP tools available?** If `excalidraw/batch_create_elements` and other `excalidraw/*` tools appear in your tool list, use them directly. Skip to Step 1.
 
-**REST API mode** (fallback): If MCP tools aren't available, use HTTP endpoints at `http://localhost:3000`. See the cheatsheet for REST payloads. Note the format differences in the table below — REST and MCP accept slightly different field names.
+**Check 2 — mcp-call registered?** Run `mcp-call --servers` and look for any `excalidraw-*` entry. If found, use `mcp-call excalidraw-<port> <tool> ...`. Skip to Step 1.
 
-**Neither works?** Tell the user:
-> The Excalidraw canvas server is not running. To set up:
-> 1. `git clone https://github.com/yctimlin/mcp_excalidraw && cd mcp_excalidraw`
-> 2. `npm ci && npm run build`
-> 3. `PORT=3000 npm run canvas`
-> 4. Open `http://localhost:3000` in a browser
-> 5. (Recommended) Install the MCP server:
->    `claude mcp add excalidraw -s user -e EXPRESS_SERVER_URL=http://localhost:3000 -- node /path/to/mcp_excalidraw/dist/index.js`
+**None worked? Auto-setup the canvas server:**
+
+```bash
+# 1. Clone if not already present
+EXCALIDRAW_DIR="${HOME}/.local/share/mcp-excalidraw"
+if [ ! -d "$EXCALIDRAW_DIR" ]; then
+  git clone https://github.com/wise-toddler/mcp_excalidraw "$EXCALIDRAW_DIR"
+  cd "$EXCALIDRAW_DIR" && npm install && npm run build
+fi
+
+# 2. Launch an isolated session (random port, auto-registers with mcp-call)
+cd "$EXCALIDRAW_DIR" && bash launch.sh &
+# Wait for output — it prints the port and canvas URL
+
+# 3. Tell the user to open the canvas URL in their browser
+```
+
+After launch.sh starts, use `mcp-call excalidraw-<port> <tool> ...` for all operations.
+To get the canvas URL: `mcp-call excalidraw-<port> get_canvas_url`
 
 ### MCP vs REST API Quick Reference
 
@@ -41,6 +52,7 @@ Two modes are available. Try MCP first — it has more capabilities.
 | Viewport | `set_viewport` | `POST /api/viewport` (needs browser) |
 | Export image | `export_to_image` | `POST /api/export/image` (needs browser) |
 | Export URL | `export_to_excalidraw_url` | Only via MCP |
+| Get canvas URL | `get_canvas_url` | N/A (use EXPRESS_SERVER_URL) |
 
 ### Format Differences Between Modes (Critical)
 
@@ -159,14 +171,14 @@ If you find any issue: **stop, fix it, re-screenshot, then continue.** Say "I se
 ### REST API Mode
 
 1. Plan your coordinate grid first.
-2. Optional: `curl -X DELETE http://localhost:3000/api/elements/clear`
+2. Optional: `curl -X DELETE http://localhost:$PORT/api/elements/clear`
 3. Create elements using `POST /api/elements/batch`. Use `"label": {"text": "..."}` for labels.
 4. Bind arrows with `"start": {"id": "..."}` / `"end": {"id": "..."}`.
 5. Verify with `POST /api/export/image` → save PNG → run Quality Checklist.
 
 **REST API element + arrow example:**
 ```bash
-curl -X POST http://localhost:3000/api/elements/batch \
+curl -X POST http://localhost:$PORT/api/elements/batch \
   -H "Content-Type: application/json" \
   -d '{
     "elements": [
@@ -261,7 +273,7 @@ After conversion, call `set_viewport` with `scrollToContent: true` and `get_canv
 
 **REST mode:**
 ```bash
-curl -X POST http://localhost:3000/api/elements/from-mermaid \
+curl -X POST http://localhost:$PORT/api/elements/from-mermaid \
   -H "Content-Type: application/json" \
   -d '{"mermaid": "graph TD\n  A --> B\n  B --> C"}'
 ```

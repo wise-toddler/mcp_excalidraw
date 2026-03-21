@@ -820,6 +820,15 @@ const tools: Tool[] = [
         }
       }
     }
+  },
+  {
+    name: 'get_canvas_url',
+    description: 'Get the URL to open this session\'s Excalidraw canvas in a browser.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      required: []
+    }
   }
 ];
 
@@ -2211,6 +2220,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
             type: 'text',
             text: `Viewport updated successfully.\n\n${JSON.stringify(viewportResult, null, 2)}`
           }]
+        };
+      }
+
+      case 'get_canvas_url': {
+        return {
+          content: [{ type: 'text', text: `Canvas URL: ${EXPRESS_SERVER_URL}` }]
         };
       }
 
