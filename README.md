@@ -1,16 +1,14 @@
 # Excalidraw MCP Server & Agent Skill
 
-[![CI](https://github.com/yctimlin/mcp_excalidraw/actions/workflows/ci.yml/badge.svg)](https://github.com/yctimlin/mcp_excalidraw/actions/workflows/ci.yml)
-[![Docker Build & Push](https://github.com/yctimlin/mcp_excalidraw/actions/workflows/docker.yml/badge.svg)](https://github.com/yctimlin/mcp_excalidraw/actions/workflows/docker.yml)
-[![NPM Version](https://img.shields.io/npm/v/mcp-excalidraw-server)](https://www.npmjs.com/package/mcp-excalidraw-server)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Run a live Excalidraw canvas and control it from AI agents. This repo provides:
 
 - **MCP Server**: Connect via Model Context Protocol (Claude Desktop, Cursor, Codex CLI, etc.)
 - **Agent Skill**: Portable skill for Claude Code, Codex CLI, and other skill-enabled agents
+- **Per-session isolation**: `launch.sh` gives each agent session its own canvas on a random port
 
-Keywords: Excalidraw agent skill, Excalidraw MCP server, AI diagramming, Claude Code skill, Codex CLI skill, Claude Desktop MCP, Cursor MCP, Mermaid to Excalidraw.
+> Fork of [yctimlin/mcp_excalidraw](https://github.com/yctimlin/mcp_excalidraw) with per-session isolation via `launch.sh` + `mcp-call` integration.
 
 ## Demo
 
@@ -24,6 +22,7 @@ Keywords: Excalidraw agent skill, Excalidraw MCP server, AI diagramming, Claude 
 - [What It Is](#what-it-is)
 - [How We Differ from the Official Excalidraw MCP](#how-we-differ-from-the-official-excalidraw-mcp)
 - [What's New](#whats-new)
+- [Quick Start (One Command)](#quick-start-one-command)
 - [Quick Start (Local)](#quick-start-local)
 - [Quick Start (Docker)](#quick-start-docker)
 - [Configure MCP Clients](#configure-mcp-clients)
@@ -33,8 +32,8 @@ Keywords: Excalidraw agent skill, Excalidraw MCP server, AI diagramming, Claude 
   - [Codex CLI](#codex-cli)
   - [OpenCode](#opencode)
   - [Antigravity (Google)](#antigravity-google)
-- [Agent Skill (Optional)](#agent-skill-optional)
-- [MCP Tools (26 Total)](#mcp-tools-26-total)
+- [Agent Skill](#agent-skill)
+- [MCP Tools (27 Total)](#mcp-tools-27-total)
 - [Testing](#testing)
 - [Troubleshooting](#troubleshooting)
 - [Known Issues / TODO](#known-issues--todo)
@@ -53,7 +52,7 @@ Excalidraw now has an [official MCP](https://github.com/excalidraw/excalidraw-mc
 
 | | Official Excalidraw MCP | This Project |
 |---|---|---|
-| **Approach** | Prompt in, diagram out (one-shot) | Programmatic element-level control (26 tools) |
+| **Approach** | Prompt in, diagram out (one-shot) | Programmatic element-level control (27 tools) |
 | **State** | Stateless — each call is independent | Persistent live canvas with real-time sync |
 | **Element CRUD** | No | Full create / read / update / delete per element |
 | **AI sees the canvas** | No | `describe_scene` (structured text) + `get_canvas_screenshot` (image) |
@@ -91,6 +90,15 @@ Excalidraw now has an [official MCP](https://github.com/excalidraw/excalidraw-mc
 - Better testing loop: MCP Inspector CLI examples + browser screenshot checks (`agent-browser`)
 - Bugfixes: batch create now preserves element ids (fixes update/delete after batch); frontend entrypoint fixed (`main.tsx`)
 
+## Quick Start (One Command)
+
+Install the skill via the [skills ecosystem](https://skills.sh/):
+```bash
+npx skills add wise-toddler/mcp_excalidraw@excalidraw-skill
+```
+
+The agent will auto-setup everything (clone, build, launch) when it reads the skill. See [Agent Skill](#agent-skill) below.
+
 ## Quick Start (Local)
 
 Prereqs: Node >= 18, npm
@@ -100,19 +108,29 @@ npm ci
 npm run build
 ```
 
-Terminal 1: start the canvas
+**Option A — Per-session isolation (recommended):**
+```bash
+bash launch.sh
+# Picks a random free port, starts canvas, registers with mcp-call
+# Output: Canvas: http://localhost:<port>
+#         MCP:    mcp-call excalidraw-<port> <tool> ...
+```
+
+Open the printed URL in your browser. Use `mcp-call excalidraw-<port> <tool>` to interact.
+
+**Option B — Manual (fixed port):**
+
+Terminal 1:
 ```bash
 PORT=3000 npm run canvas
 ```
 
-> **Security note:** The server defaults to binding on `localhost` only. If you need to expose it on a network interface (e.g. Docker, remote access), set `HOST=0.0.0.0` — but ensure you have network-level access controls in place, as the API has no built-in authentication.
-
-Open `http://localhost:3000`.
-
-Terminal 2: run the MCP server (stdio)
+Terminal 2:
 ```bash
 EXPRESS_SERVER_URL=http://localhost:3000 node dist/index.js
 ```
+
+> **Security note:** The server defaults to binding on `localhost` only. Set `HOST=0.0.0.0` for network access — but ensure you have access controls, as the API has no built-in auth.
 
 ## Quick Start (Docker)
 
@@ -367,63 +385,39 @@ Config location: `~/.gemini/antigravity/mcp_config.json`
 - **Absolute paths**: When using local node setup, replace `/absolute/path/to/mcp_excalidraw` with the actual path where you cloned and built the repo.
 - **In-memory storage**: The canvas server stores elements in memory. Restarting the server will clear all elements. Use the export/import scripts if you need persistence.
 
-## Agent Skill (Optional)
+## Agent Skill
 
-This repo includes a skill at `skills/excalidraw-skill/` that provides:
+The skill at `skills/excalidraw-skill/` auto-handles setup — the agent reads `SKILL.md`, clones the repo, builds, and launches a canvas session automatically.
 
-- **Workflow playbook** (`SKILL.md`): step-by-step guidance for drawing, refining, and exporting diagrams
-- **Cheatsheet** (`references/cheatsheet.md`): MCP tool and REST API reference
-- **Helper scripts** (`scripts/*.cjs`): export, import, clear, healthcheck, CRUD operations
-
-The skill complements the MCP server by giving your AI agent structured workflows to follow.
-
-### Install The Skill (Codex CLI example)
+### Install via skills ecosystem (recommended)
 
 ```bash
+npx skills add wise-toddler/mcp_excalidraw@excalidraw-skill
+```
+
+### Manual install
+
+```bash
+# Claude Code
+mkdir -p ~/.claude/skills
+cp -R skills/excalidraw-skill ~/.claude/skills/excalidraw-skill
+
+# Codex CLI
 mkdir -p ~/.codex/skills
 cp -R skills/excalidraw-skill ~/.codex/skills/excalidraw-skill
 ```
 
-To update an existing installation, remove the old folder first (`rm -rf ~/.codex/skills/excalidraw-skill`) then re-copy.
+### How the skill works
 
-### Install The Skill (Claude Code)
-
-**User-level** (available across all your projects):
-```bash
-mkdir -p ~/.claude/skills
-cp -R skills/excalidraw-skill ~/.claude/skills/excalidraw-skill
-```
-
-**Project-level** (scoped to a specific project, can be committed to the repo):
-```bash
-mkdir -p /path/to/your/project/.claude/skills
-cp -R skills/excalidraw-skill /path/to/your/project/.claude/skills/excalidraw-skill
-```
-
-Then invoke the skill in Claude Code with `/excalidraw-skill`.
-
-To update an existing installation, remove the old folder first then re-copy.
-
-### Use The Skill Scripts
-
-All scripts respect `EXPRESS_SERVER_URL` (default `http://localhost:3000`) or accept `--url`.
-
-```bash
-EXPRESS_SERVER_URL=http://127.0.0.1:3000 node skills/excalidraw-skill/scripts/healthcheck.cjs
-EXPRESS_SERVER_URL=http://127.0.0.1:3000 node skills/excalidraw-skill/scripts/export-elements.cjs --out diagram.elements.json
-EXPRESS_SERVER_URL=http://127.0.0.1:3000 node skills/excalidraw-skill/scripts/import-elements.cjs --in diagram.elements.json --mode batch
-```
-
-### When The Skill Is Useful
-
-- Repository workflow: export elements as JSON, commit it, and re-import later.
-- Reliable refactors: clear + re-import in `sync` mode to make canvas match a file.
-- Automated smoke tests: create/update/delete a known element to validate a deployment.
-- Repeatable diagrams: keep a library of element JSON snippets and import them.
+1. Agent checks if MCP tools or `mcp-call` is already available
+2. If not, clones the repo to `~/.local/share/mcp-excalidraw/`, builds, runs `launch.sh`
+3. `launch.sh` picks a random free port, starts canvas, registers with `mcp-call`
+4. Agent uses `mcp-call excalidraw-<port> <tool>` for all operations
+5. On exit, canvas server and `mcp-call` registration are cleaned up automatically
 
 See `skills/excalidraw-skill/SKILL.md` and `skills/excalidraw-skill/references/cheatsheet.md`.
 
-## MCP Tools (26 Total)
+## MCP Tools (27 Total)
 
 | Category | Tools |
 |---|---|
@@ -433,6 +427,7 @@ See `skills/excalidraw-skill/SKILL.md` and `skills/excalidraw-skill/references/c
 | **File I/O** | `export_scene`, `import_scene`, `export_to_image`, `export_to_excalidraw_url`, `create_from_mermaid` |
 | **State Management** | `clear_canvas`, `snapshot_scene`, `restore_snapshot` |
 | **Viewport** | `set_viewport` |
+| **Session** | `get_canvas_url` |
 | **Design Guide** | `read_diagram_guide` |
 | **Resources** | `get_resource` |
 
