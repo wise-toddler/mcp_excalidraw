@@ -232,12 +232,33 @@ Using `describe_scene` and `get_canvas_screenshot` together is what makes this s
 - **`describe_scene`** → returns structured text: element IDs, types, positions, labels, connections. Use this when you need to know *what's on the canvas* before making programmatic updates (find IDs, understand bounding boxes).
 - **`get_canvas_screenshot`** → returns a PNG image of the actual rendered canvas. Use this for *visual quality verification* — it shows you exactly what the user sees, including truncation, overlap, and arrow routing.
 
+### How to take and view a screenshot
+
+**Via MCP tools** (if registered as MCP server): Call `get_canvas_screenshot` — it returns an inline image block directly.
+
+**Via mcp-call** (recommended): `mcp-call excalidraw-<port> get_canvas_screenshot` saves the PNG to a temp file and prints the path (e.g. `/tmp/mcp-call/mcp-abc123.png`). **Read that file path** with your file reading tool to see the image. Example:
+
+```
+$ mcp-call excalidraw-<port> get_canvas_screenshot
+/tmp/mcp-call/mcp-abc123.png
+Canvas screenshot captured.
+
+→ Now read /tmp/mcp-call/mcp-abc123.png to visually inspect the diagram
+```
+
+**Feedback loop (mcp-call):**
+```
+mcp-call excalidraw-<port> batch_create_elements --json '...'
+  → mcp-call excalidraw-<port> get_canvas_screenshot → read the printed .png path → "text truncated on auth-svc"
+  → mcp-call excalidraw-<port> update_element --id=auth-svc --width=250 → screenshot again → "all checks pass"
+  → proceed
+```
+
 **Feedback loop (MCP):**
 ```
 batch_create_elements
   → get_canvas_screenshot → "text truncated on auth-svc"
-  → update_element (increase width) → get_canvas_screenshot → "overlap between auth-svc and rate-limiter"
-  → update_element (reposition) → get_canvas_screenshot → "all checks pass"
+  → update_element (increase width) → get_canvas_screenshot → "all checks pass"
   → proceed
 ```
 
