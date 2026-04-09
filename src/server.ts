@@ -47,6 +47,14 @@ const wss = new WebSocketServer({ server });
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
+// Redirect / to /canvases when multiple canvases exist (before static files)
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (req.path === '/' && !req.query.canvasId && canvases.size > 1) {
+    return res.redirect('/canvases');
+  }
+  next();
+});
+
 // Serve static files from the build directory
 const staticDir = path.join(__dirname, '../dist');
 app.use(express.static(staticDir));
@@ -1496,8 +1504,11 @@ ${list.map(c => `
   res.send(html);
 });
 
-// Serve the frontend
+// Serve the frontend — redirect to /canvases if multiple canvases exist and no canvasId specified
 app.get('/', (req: Request, res: Response) => {
+  if (!req.query.canvasId && canvases.size > 1) {
+    return res.redirect('/canvases');
+  }
   const htmlFile = path.join(__dirname, '../dist/frontend/index.html');
   res.sendFile(htmlFile, (err) => {
     if (err) {
