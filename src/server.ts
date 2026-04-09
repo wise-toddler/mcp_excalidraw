@@ -4,12 +4,17 @@ import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { exec } from 'child_process';
+import os from 'os';
 import dotenv from 'dotenv';
 import logger from './utils/logger.js';
 import {
   elements,
   files,
   snapshots,
+  canvases,
+  getCanvas,
+  Canvas,
   generateId,
   EXCALIDRAW_ELEMENT_TYPES,
   ServerElement,
@@ -52,10 +57,43 @@ app.use('/assets/fonts', express.static(
   path.join(__dirname, '../node_modules/@excalidraw/excalidraw/dist/prod/fonts')
 ));
 
+// Extract canvasId from query param or header, default to 'default'
+function getCanvasId(req: Request): string {
+  return (req.query.canvasId as string) || (req.headers['x-canvas-id'] as string) || 'default';
+}
+
 // WebSocket connections
 const clients = new Set<WebSocket>();
+// Track which canvas each WebSocket client is subscribed to
+const clientCanvasMap = new Map<WebSocket, string>();
 
-// Broadcast to all connected clients
+/** Open a URL in the system's default browser. */
+function openInBrowser(url: string): void {
+  const platform = os.platform();
+  const cmd = platform === 'darwin' ? 'open' : platform === 'win32' ? 'start' : 'xdg-open';
+  exec(`${cmd} "${url}"`, (err) => {
+    if (err) logger.warn('Failed to auto-open browser:', err.message);
+  });
+}
+
+/** Wait for a WebSocket client to connect within the given timeout. */
+function waitForClient(timeoutMs: number = 15000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (clients.size > 0) return resolve();
+    const timeout = setTimeout(() => {
+      wss.removeListener('connection', onConnect);
+      reject(new Error('No browser connected within timeout. Open the canvas URL manually.'));
+    }, timeoutMs);
+    const onConnect = () => {
+      clearTimeout(timeout);
+      // Give browser a moment to fully initialize Excalidraw
+      setTimeout(resolve, 2000);
+    };
+    wss.once('connection', onConnect);
+  });
+}
+
+// Broadcast to all connected clients (kept for backward compat)
 function broadcast(message: WebSocketMessage): void {
   const data = JSON.stringify(message);
   clients.forEach(client => {
@@ -66,6 +104,26 @@ function broadcast(message: WebSocketMessage): void {
     } catch (err) {
       logger.warn('Failed to send to client, removing');
       clients.delete(client);
+      clientCanvasMap.delete(client);
+    }
+  });
+}
+
+// Broadcast only to clients subscribed to a specific canvas
+function broadcastToCanvas(canvasId: string, message: WebSocketMessage): void {
+  const data = JSON.stringify(message);
+  clients.forEach(client => {
+    const clientCanvas = clientCanvasMap.get(client) || 'default';
+    if (clientCanvas === canvasId) {
+      try {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(data);
+        }
+      } catch (err) {
+        logger.warn('Failed to send to client, removing');
+        clients.delete(client);
+        clientCanvasMap.delete(client);
+      }
     }
   });
 }
@@ -77,36 +135,42 @@ function normalizeLineBreakMarkup(text: string): string {
 }
 
 // WebSocket connection handling
-wss.on('connection', (ws: WebSocket) => {
+wss.on('connection', (ws: WebSocket, req: any) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const canvasId = url.searchParams.get('canvasId') || 'default';
   clients.add(ws);
-  logger.info('New WebSocket connection established');
+  clientCanvasMap.set(ws, canvasId);
+  logger.info(`New WebSocket connection established for canvas: ${canvasId}`);
 
-  // Send current elements to new client
+  // Send current elements for THIS canvas to new client
+  const canvas = getCanvas(canvasId);
   const filesObj: Record<string, ExcalidrawFile> = {};
-  files.forEach((f, id) => { filesObj[id] = f; });
+  canvas.files.forEach((f, id) => { filesObj[id] = f; });
   const initialMessage: InitialElementsMessage & { files?: Record<string, ExcalidrawFile> } = {
     type: 'initial_elements',
-    elements: Array.from(elements.values()),
-    ...(files.size > 0 ? { files: filesObj } : {})
+    elements: Array.from(canvas.elements.values()),
+    ...(canvas.files.size > 0 ? { files: filesObj } : {})
   };
   ws.send(JSON.stringify(initialMessage));
 
   // Send sync status to new client
   const syncMessage: SyncStatusMessage = {
     type: 'sync_status',
-    elementCount: elements.size,
+    elementCount: canvas.elements.size,
     timestamp: new Date().toISOString()
   };
   ws.send(JSON.stringify(syncMessage));
 
   ws.on('close', () => {
     clients.delete(ws);
+    clientCanvasMap.delete(ws);
     logger.info('WebSocket connection closed');
   });
 
   ws.on('error', (error) => {
     logger.error('WebSocket error:', error);
     clients.delete(ws);
+    clientCanvasMap.delete(ws);
   });
 });
 
@@ -229,7 +293,8 @@ const UpdateElementSchema = z.object({
 // Get all elements
 app.get('/api/elements', (req: Request, res: Response) => {
   try {
-    const elementsArray = Array.from(elements.values());
+    const canvas = getCanvas(getCanvasId(req));
+    const elementsArray = Array.from(canvas.elements.values());
     res.json({
       success: true,
       elements: elementsArray,
@@ -247,6 +312,8 @@ app.get('/api/elements', (req: Request, res: Response) => {
 // Create new element
 app.post('/api/elements', (req: Request, res: Response) => {
   try {
+    const canvasId = getCanvasId(req);
+    const canvas = getCanvas(canvasId);
     const params = CreateElementSchema.parse(req.body);
     logger.info('Creating element via API', { type: params.type });
 
@@ -263,17 +330,17 @@ app.post('/api/elements', (req: Request, res: Response) => {
 
     // Resolve arrow bindings against existing elements
     if (element.type === 'arrow' || element.type === 'line') {
-      resolveArrowBindings([element]);
+      resolveArrowBindings([element], canvas.elements);
     }
 
-    elements.set(id, element);
+    canvas.elements.set(id, element);
 
-    // Broadcast to all connected clients
+    // Broadcast to all connected clients on this canvas
     const message: ElementCreatedMessage = {
       type: 'element_created',
       element: element
     };
-    broadcast(message);
+    broadcastToCanvas(canvasId, message);
 
     res.json({
       success: true,
@@ -291,6 +358,8 @@ app.post('/api/elements', (req: Request, res: Response) => {
 // Update element
 app.put('/api/elements/:id', (req: Request, res: Response) => {
   try {
+    const canvasId = getCanvasId(req);
+    const canvas = getCanvas(canvasId);
     const { id } = req.params;
     const updates = UpdateElementSchema.parse({ id, ...req.body });
 
@@ -301,7 +370,7 @@ app.put('/api/elements/:id', (req: Request, res: Response) => {
       });
     }
 
-    const existingElement = elements.get(id);
+    const existingElement = canvas.elements.get(id);
     if (!existingElement) {
       return res.status(404).json({
         success: false,
@@ -341,14 +410,14 @@ app.put('/api/elements/:id', (req: Request, res: Response) => {
       }
     }
 
-    elements.set(id, updatedElement);
+    canvas.elements.set(id, updatedElement);
 
-    // Broadcast to all connected clients
+    // Broadcast to all connected clients on this canvas
     const message: ElementUpdatedMessage = {
       type: 'element_updated',
       element: updatedElement
     };
-    broadcast(message);
+    broadcastToCanvas(canvasId, message);
 
     res.json({
       success: true,
@@ -366,10 +435,12 @@ app.put('/api/elements/:id', (req: Request, res: Response) => {
 // Clear all elements (must be before /:id route)
 app.delete('/api/elements/clear', (req: Request, res: Response) => {
   try {
-    const count = elements.size;
-    elements.clear();
+    const canvasId = getCanvasId(req);
+    const canvas = getCanvas(canvasId);
+    const count = canvas.elements.size;
+    canvas.elements.clear();
 
-    broadcast({
+    broadcastToCanvas(canvasId, {
       type: 'canvas_cleared',
       timestamp: new Date().toISOString()
     });
@@ -393,6 +464,8 @@ app.delete('/api/elements/clear', (req: Request, res: Response) => {
 // Delete element
 app.delete('/api/elements/:id', (req: Request, res: Response) => {
   try {
+    const canvasId = getCanvasId(req);
+    const canvas = getCanvas(canvasId);
     const { id } = req.params;
 
     if (!id) {
@@ -402,21 +475,21 @@ app.delete('/api/elements/:id', (req: Request, res: Response) => {
       });
     }
 
-    if (!elements.has(id)) {
+    if (!canvas.elements.has(id)) {
       return res.status(404).json({
         success: false,
         error: `Element with ID ${id} not found`
       });
     }
 
-    elements.delete(id);
+    canvas.elements.delete(id);
 
-    // Broadcast to all connected clients
+    // Broadcast to all connected clients on this canvas
     const message: ElementDeletedMessage = {
       type: 'element_deleted',
       elementId: id!
     };
-    broadcast(message);
+    broadcastToCanvas(canvasId, message);
 
     res.json({
       success: true,
@@ -434,8 +507,9 @@ app.delete('/api/elements/:id', (req: Request, res: Response) => {
 // Query elements with filters
 app.get('/api/elements/search', (req: Request, res: Response) => {
   try {
-    const { type, ...filters } = req.query;
-    let results = Array.from(elements.values());
+    const canvas = getCanvas(getCanvasId(req));
+    const { type, canvasId: _cid, ...filters } = req.query;
+    let results = Array.from(canvas.elements.values());
 
     // Filter by type if specified
     if (type && typeof type === 'string') {
@@ -468,6 +542,7 @@ app.get('/api/elements/search', (req: Request, res: Response) => {
 // Get element by ID
 app.get('/api/elements/:id', (req: Request, res: Response) => {
   try {
+    const canvas = getCanvas(getCanvasId(req));
     const { id } = req.params;
 
     if (!id) {
@@ -477,7 +552,7 @@ app.get('/api/elements/:id', (req: Request, res: Response) => {
       });
     }
 
-    const element = elements.get(id);
+    const element = canvas.elements.get(id);
 
     if (!element) {
       return res.status(404).json({
@@ -552,12 +627,12 @@ function computeEdgePoint(
 }
 
 // Helper: resolve arrow bindings in a batch
-function resolveArrowBindings(batchElements: ServerElement[]): void {
+function resolveArrowBindings(batchElements: ServerElement[], canvasElements: Map<string, ServerElement> = elements): void {
   const elementMap = new Map<string, ServerElement>();
   batchElements.forEach(el => elementMap.set(el.id, el));
 
   // Also check existing elements for cross-batch references
-  elements.forEach((el, id) => {
+  canvasElements.forEach((el, id) => {
     if (!elementMap.has(id)) elementMap.set(id, el);
   });
 
@@ -618,6 +693,8 @@ function resolveArrowBindings(batchElements: ServerElement[]): void {
 // Batch create elements
 app.post('/api/elements/batch', (req: Request, res: Response) => {
   try {
+    const canvasId = getCanvasId(req);
+    const canvas = getCanvas(canvasId);
     const { elements: elementsToCreate } = req.body;
 
     if (!Array.isArray(elementsToCreate)) {
@@ -646,17 +723,17 @@ app.post('/api/elements/batch', (req: Request, res: Response) => {
     });
 
     // Resolve arrow bindings (computes positions, startBinding, endBinding, boundElements)
-    resolveArrowBindings(createdElements);
+    resolveArrowBindings(createdElements, canvas.elements);
 
     // Store all elements after binding resolution
-    createdElements.forEach(el => elements.set(el.id, el));
+    createdElements.forEach(el => canvas.elements.set(el.id, el));
 
-    // Broadcast to all connected clients
+    // Broadcast to all connected clients on this canvas
     const message: BatchCreatedMessage = {
       type: 'elements_batch_created',
       elements: createdElements
     };
-    broadcast(message);
+    broadcastToCanvas(canvasId, message);
 
     res.json({
       success: true,
@@ -665,6 +742,61 @@ app.post('/api/elements/batch', (req: Request, res: Response) => {
     });
   } catch (error) {
     logger.error('Error batch creating elements:', error);
+    res.status(400).json({
+      success: false,
+      error: (error as Error).message
+    });
+  }
+});
+
+// Batch update elements
+app.post('/api/elements/batch-update', (req: Request, res: Response) => {
+  try {
+    const canvasId = getCanvasId(req);
+    const canvas = getCanvas(canvasId);
+    const { elements: updatesToApply } = req.body;
+
+    if (!Array.isArray(updatesToApply)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Expected an array of element updates'
+      });
+    }
+
+    const updatedElements: ServerElement[] = [];
+    const errors: string[] = [];
+
+    for (const update of updatesToApply) {
+      const parsed = UpdateElementSchema.parse(update);
+      const existing = canvas.elements.get(parsed.id);
+      if (!existing) {
+        errors.push(`Element ${parsed.id} not found`);
+        continue;
+      }
+      const updatedElement: ServerElement = {
+        ...existing,
+        ...parsed,
+        fontFamily: parsed.fontFamily !== undefined ? normalizeFontFamily(parsed.fontFamily) : existing.fontFamily,
+        updatedAt: new Date().toISOString(),
+        version: (existing.version || 0) + 1
+      };
+      canvas.elements.set(parsed.id, updatedElement);
+      updatedElements.push(updatedElement);
+    }
+
+    // Broadcast updates
+    for (const el of updatedElements) {
+      broadcastToCanvas(canvasId, { type: 'element_updated', element: el } as ElementUpdatedMessage);
+    }
+
+    res.json({
+      success: true,
+      elements: updatedElements,
+      count: updatedElements.length,
+      errors: errors.length > 0 ? errors : undefined
+    });
+  } catch (error) {
+    logger.error('Error batch updating elements:', error);
     res.status(400).json({
       success: false,
       error: (error as Error).message
@@ -689,8 +821,9 @@ app.post('/api/elements/from-mermaid', (req: Request, res: Response) => {
       hasConfig: !!config
     });
 
-    // Broadcast to all WebSocket clients to process the Mermaid diagram
-    broadcast({
+    // Broadcast to WebSocket clients on this canvas to process the Mermaid diagram
+    const canvasId = getCanvasId(req);
+    broadcastToCanvas(canvasId, {
       type: 'mermaid_convert',
       mermaidDiagram,
       config: config || {},
@@ -716,6 +849,8 @@ app.post('/api/elements/from-mermaid', (req: Request, res: Response) => {
 // Sync elements from frontend (overwrite sync)
 app.post('/api/elements/sync', (req: Request, res: Response) => {
   try {
+    const canvasId = getCanvasId(req);
+    const canvas = getCanvas(canvasId);
     const { elements: frontendElements, timestamp } = req.body;
 
     logger.info(`Sync request received: ${frontendElements.length} elements`, {
@@ -732,10 +867,10 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
     }
 
     // Record element count before sync
-    const beforeCount = elements.size;
+    const beforeCount = canvas.elements.size;
 
     // 1. Clear existing memory storage
-    elements.clear();
+    canvas.elements.clear();
     logger.info(`Cleared existing elements: ${beforeCount} elements removed`);
 
     // 2. Batch write new data
@@ -758,7 +893,7 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
         };
 
         // Store to memory
-        elements.set(elementId, processedElement);
+        canvas.elements.set(elementId, processedElement);
         processedElements.push(processedElement);
         successCount++;
 
@@ -769,8 +904,8 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
 
     logger.info(`Sync completed: ${successCount}/${frontendElements.length} elements synced`);
 
-    // 3. Broadcast sync event to all WebSocket clients
-    broadcast({
+    // 3. Broadcast sync event to WebSocket clients on this canvas
+    broadcastToCanvas(canvasId, {
       type: 'elements_synced',
       count: successCount,
       timestamp: new Date().toISOString(),
@@ -784,7 +919,7 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
       count: successCount,
       syncedAt: new Date().toISOString(),
       beforeCount,
-      afterCount: elements.size
+      afterCount: canvas.elements.size
     });
 
   } catch (error) {
@@ -799,31 +934,36 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
 
 // ─── Files API (for image elements) ───────────────────────────
 // GET all files
-app.get('/api/files', (_req: Request, res: Response) => {
+app.get('/api/files', (req: Request, res: Response) => {
+  const canvas = getCanvas(getCanvasId(req));
   const filesObj: Record<string, ExcalidrawFile> = {};
-  files.forEach((f, id) => { filesObj[id] = f; });
+  canvas.files.forEach((f, id) => { filesObj[id] = f; });
   res.json({ files: filesObj });
 });
 
 // POST add/update files (batch)
 app.post('/api/files', (req: Request, res: Response) => {
+  const canvasId = getCanvasId(req);
+  const canvas = getCanvas(canvasId);
   const body = req.body;
   const fileList: ExcalidrawFile[] = Array.isArray(body) ? body : (body?.files || []);
   for (const f of fileList) {
     if (f.id && f.dataURL) {
-      files.set(f.id, { id: f.id, dataURL: f.dataURL, mimeType: f.mimeType || 'image/png', created: f.created || Date.now() });
+      canvas.files.set(f.id, { id: f.id, dataURL: f.dataURL, mimeType: f.mimeType || 'image/png', created: f.created || Date.now() });
     }
   }
-  // Broadcast files to connected clients
-  broadcast({ type: 'files_added', files: fileList });
+  // Broadcast files to connected clients on this canvas
+  broadcastToCanvas(canvasId, { type: 'files_added', files: fileList });
   res.json({ success: true, count: fileList.length });
 });
 
 // DELETE a file
 app.delete('/api/files/:id', (req: Request, res: Response) => {
+  const canvasId = getCanvasId(req);
+  const canvas = getCanvas(canvasId);
   const id = req.params.id as string;
-  if (files.delete(id)) {
-    broadcast({ type: 'file_deleted', fileId: id });
+  if (canvas.files.delete(id)) {
+    broadcastToCanvas(canvasId, { type: 'file_deleted', fileId: id });
     res.json({ success: true });
   } else {
     res.status(404).json({ success: false, error: `File with ID ${id} not found` });
@@ -840,7 +980,7 @@ interface PendingExport {
 }
 const pendingExports = new Map<string, PendingExport>();
 
-app.post('/api/export/image', (req: Request, res: Response) => {
+app.post('/api/export/image', async (req: Request, res: Response) => {
   try {
     const { format, background } = req.body;
 
@@ -852,10 +992,19 @@ app.post('/api/export/image', (req: Request, res: Response) => {
     }
 
     if (clients.size === 0) {
-      return res.status(503).json({
-        success: false,
-        error: 'No frontend client connected. Open the canvas in a browser first.'
-      });
+      // Auto-open browser and wait for connection
+      const canvasUrl = `http://localhost:${PORT}`;
+      logger.info('No frontend client connected, auto-opening browser...');
+      openInBrowser(canvasUrl);
+      try {
+        await waitForClient();
+        logger.info('Browser connected, proceeding with export');
+      } catch (err) {
+        return res.status(503).json({
+          success: false,
+          error: (err as Error).message
+        });
+      }
     }
 
     const requestId = generateId();
@@ -877,17 +1026,19 @@ app.post('/api/export/image', (req: Request, res: Response) => {
 
     // Re-broadcast current elements so all connected clients (including stale ones)
     // sync to the canonical server state before exporting
+    const canvasId = getCanvasId(req);
+    const canvas = getCanvas(canvasId);
     const filesObj: Record<string, ExcalidrawFile> = {};
-    files.forEach((f, id) => { filesObj[id] = f; });
-    broadcast({
+    canvas.files.forEach((f, id) => { filesObj[id] = f; });
+    broadcastToCanvas(canvasId, {
       type: 'initial_elements',
-      elements: Array.from(elements.values()),
-      ...(files.size > 0 ? { files: filesObj } : {})
+      elements: Array.from(canvas.elements.values()),
+      ...(canvas.files.size > 0 ? { files: filesObj } : {})
     } as InitialElementsMessage & { files?: Record<string, ExcalidrawFile> });
 
     // Give browsers time to process the reload before requesting export
     setTimeout(() => {
-      broadcast({
+      broadcastToCanvas(canvasId, {
         type: 'export_image_request',
         requestId,
         format,
@@ -977,15 +1128,24 @@ interface PendingViewport {
 }
 const pendingViewports = new Map<string, PendingViewport>();
 
-app.post('/api/viewport', (req: Request, res: Response) => {
+app.post('/api/viewport', async (req: Request, res: Response) => {
   try {
     const { scrollToContent, scrollToElementId, zoom, offsetX, offsetY } = req.body;
 
     if (clients.size === 0) {
-      return res.status(503).json({
-        success: false,
-        error: 'No frontend client connected. Open the canvas in a browser first.'
-      });
+      // Auto-open browser and wait for connection
+      const canvasUrl = `http://localhost:${PORT}`;
+      logger.info('No frontend client connected, auto-opening browser...');
+      openInBrowser(canvasUrl);
+      try {
+        await waitForClient();
+        logger.info('Browser connected, proceeding with viewport');
+      } catch (err) {
+        return res.status(503).json({
+          success: false,
+          error: (err as Error).message
+        });
+      }
     }
 
     const requestId = generateId();
@@ -999,7 +1159,7 @@ app.post('/api/viewport', (req: Request, res: Response) => {
       pendingViewports.set(requestId, { resolve, reject, timeout });
     });
 
-    broadcast({
+    broadcastToCanvas(getCanvasId(req), {
       type: 'set_viewport',
       requestId,
       scrollToContent,
@@ -1066,9 +1226,124 @@ app.post('/api/viewport/result', (req: Request, res: Response) => {
   }
 });
 
+// Undo/Redo: request (MCP -> Express -> WebSocket -> Frontend)
+interface PendingHistoryAction {
+  resolve: (data: { success: boolean; message: string }) => void;
+  reject: (error: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
+}
+const pendingHistoryActions = new Map<string, PendingHistoryAction>();
+
+app.post('/api/undo', async (req: Request, res: Response) => {
+  try {
+    if (clients.size === 0) {
+      // Auto-open browser and wait for connection
+      const canvasUrl = `http://localhost:${PORT}`;
+      logger.info('No frontend client connected, auto-opening browser...');
+      openInBrowser(canvasUrl);
+      try {
+        await waitForClient();
+        logger.info('Browser connected, proceeding with undo');
+      } catch (err) {
+        return res.status(503).json({
+          success: false,
+          error: (err as Error).message
+        });
+      }
+    }
+
+    const requestId = generateId();
+    const promise = new Promise<{ success: boolean; message: string }>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        pendingHistoryActions.delete(requestId);
+        reject(new Error('Undo request timed out after 10 seconds'));
+      }, 10000);
+      pendingHistoryActions.set(requestId, { resolve, reject, timeout });
+    });
+
+    broadcastToCanvas(getCanvasId(req), { type: 'undo_request', requestId });
+
+    promise
+      .then(result => res.json(result))
+      .catch(error => res.status(500).json({ success: false, error: (error as Error).message }));
+  } catch (error) {
+    logger.error('Error initiating undo:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+app.post('/api/redo', async (req: Request, res: Response) => {
+  try {
+    if (clients.size === 0) {
+      // Auto-open browser and wait for connection
+      const canvasUrl = `http://localhost:${PORT}`;
+      logger.info('No frontend client connected, auto-opening browser...');
+      openInBrowser(canvasUrl);
+      try {
+        await waitForClient();
+        logger.info('Browser connected, proceeding with redo');
+      } catch (err) {
+        return res.status(503).json({
+          success: false,
+          error: (err as Error).message
+        });
+      }
+    }
+
+    const requestId = generateId();
+    const promise = new Promise<{ success: boolean; message: string }>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        pendingHistoryActions.delete(requestId);
+        reject(new Error('Redo request timed out after 10 seconds'));
+      }, 10000);
+      pendingHistoryActions.set(requestId, { resolve, reject, timeout });
+    });
+
+    broadcastToCanvas(getCanvasId(req), { type: 'redo_request', requestId });
+
+    promise
+      .then(result => res.json(result))
+      .catch(error => res.status(500).json({ success: false, error: (error as Error).message }));
+  } catch (error) {
+    logger.error('Error initiating redo:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+// Undo/Redo: result (Frontend -> Express -> MCP)
+app.post('/api/history/result', (req: Request, res: Response) => {
+  try {
+    const { requestId, success, message, error } = req.body;
+
+    if (!requestId) {
+      return res.status(400).json({ success: false, error: 'requestId is required' });
+    }
+
+    const pending = pendingHistoryActions.get(requestId);
+    if (!pending) {
+      return res.json({ success: true });
+    }
+
+    clearTimeout(pending.timeout);
+    pendingHistoryActions.delete(requestId);
+
+    if (error) {
+      pending.resolve({ success: false, message: error });
+    } else {
+      pending.resolve({ success: true, message: message || 'History action completed' });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Error processing history result:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
 // Snapshots: save
 app.post('/api/snapshots', (req: Request, res: Response) => {
   try {
+    const canvas = getCanvas(getCanvasId(req));
     const { name } = req.body;
 
     if (!name || typeof name !== 'string') {
@@ -1080,11 +1355,11 @@ app.post('/api/snapshots', (req: Request, res: Response) => {
 
     const snapshot: Snapshot = {
       name,
-      elements: Array.from(elements.values()),
+      elements: Array.from(canvas.elements.values()),
       createdAt: new Date().toISOString()
     };
 
-    snapshots.set(name, snapshot);
+    canvas.snapshots.set(name, snapshot);
     logger.info(`Snapshot saved: "${name}" with ${snapshot.elements.length} elements`);
 
     res.json({
@@ -1105,7 +1380,8 @@ app.post('/api/snapshots', (req: Request, res: Response) => {
 // Snapshots: list
 app.get('/api/snapshots', (req: Request, res: Response) => {
   try {
-    const list = Array.from(snapshots.values()).map(s => ({
+    const canvas = getCanvas(getCanvasId(req));
+    const list = Array.from(canvas.snapshots.values()).map(s => ({
       name: s.name,
       elementCount: s.elements.length,
       createdAt: s.createdAt
@@ -1128,8 +1404,9 @@ app.get('/api/snapshots', (req: Request, res: Response) => {
 // Snapshots: get by name
 app.get('/api/snapshots/:name', (req: Request, res: Response) => {
   try {
+    const canvas = getCanvas(getCanvasId(req));
     const { name } = req.params;
-    const snapshot = snapshots.get(name!);
+    const snapshot = canvas.snapshots.get(name!);
 
     if (!snapshot) {
       return res.status(404).json({
@@ -1151,6 +1428,74 @@ app.get('/api/snapshots/:name', (req: Request, res: Response) => {
   }
 });
 
+// ─── Canvas management API ─────────────────────────────────────
+// List all canvases
+app.get('/api/canvases', (req: Request, res: Response) => {
+  const list = Array.from(canvases.values()).map(c => ({
+    id: c.id,
+    elementCount: c.elements.size,
+    fileCount: c.files.size,
+    snapshotCount: c.snapshots.size,
+    createdAt: c.createdAt,
+    lastAccessedAt: c.lastAccessedAt,
+  }));
+  res.json({ success: true, canvases: list, count: list.length });
+});
+
+// Create a new canvas
+app.post('/api/canvases', (req: Request, res: Response) => {
+  const { id } = req.body;
+  const canvasId = id || generateId();
+  if (canvases.has(canvasId)) {
+    return res.status(409).json({ success: false, error: `Canvas "${canvasId}" already exists` });
+  }
+  const canvas = getCanvas(canvasId);
+  res.json({ success: true, canvas: { id: canvas.id, createdAt: canvas.createdAt } });
+});
+
+// Delete a canvas
+app.delete('/api/canvases/:id', (req: Request, res: Response) => {
+  const { id } = req.params;
+  if (id === 'default') {
+    return res.status(400).json({ success: false, error: 'Cannot delete the default canvas' });
+  }
+  if (!canvases.has(id!)) {
+    return res.status(404).json({ success: false, error: `Canvas "${id}" not found` });
+  }
+  canvases.delete(id!);
+  res.json({ success: true, message: `Canvas "${id}" deleted` });
+});
+
+// Canvases HTML page
+app.get('/canvases', (req: Request, res: Response) => {
+  const list = Array.from(canvases.values());
+  const html = `<!DOCTYPE html>
+<html><head><title>Excalidraw Canvases</title>
+<style>
+  body { font-family: system-ui; max-width: 800px; margin: 40px auto; padding: 0 20px; }
+  h1 { color: #1e1e1e; }
+  .canvas-card { border: 1px solid #e0e0e0; border-radius: 8px; padding: 16px; margin: 12px 0; display: flex; justify-content: space-between; align-items: center; }
+  .canvas-card:hover { background: #f5f5f5; }
+  .canvas-info { flex: 1; }
+  .canvas-name { font-weight: 600; font-size: 18px; }
+  .canvas-meta { color: #666; font-size: 14px; margin-top: 4px; }
+  .canvas-link { padding: 8px 16px; background: #1971c2; color: white; text-decoration: none; border-radius: 6px; }
+  .canvas-link:hover { background: #1561a9; }
+</style></head><body>
+<h1>Excalidraw Canvases</h1>
+<p>${list.length} canvas${list.length !== 1 ? 'es' : ''} active</p>
+${list.map(c => `
+<div class="canvas-card">
+  <div class="canvas-info">
+    <div class="canvas-name">${c.id}</div>
+    <div class="canvas-meta">${c.elements.size} elements &middot; ${c.files.size} files &middot; Created: ${new Date(c.createdAt).toLocaleString()}</div>
+  </div>
+  <a class="canvas-link" href="/?canvasId=${c.id}">Open</a>
+</div>`).join('')}
+</body></html>`;
+  res.send(html);
+});
+
 // Serve the frontend
 app.get('/', (req: Request, res: Response) => {
   const htmlFile = path.join(__dirname, '../dist/frontend/index.html');
@@ -1164,19 +1509,22 @@ app.get('/', (req: Request, res: Response) => {
 
 // Health check endpoint
 app.get('/health', (req: Request, res: Response) => {
+  const canvas = getCanvas(getCanvasId(req));
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
-    elements_count: elements.size,
-    websocket_clients: clients.size
+    elements_count: canvas.elements.size,
+    websocket_clients: clients.size,
+    canvas_count: canvases.size
   });
 });
 
 // Sync status endpoint
 app.get('/api/sync/status', (req: Request, res: Response) => {
+  const canvas = getCanvas(getCanvasId(req));
   res.json({
     success: true,
-    elementCount: elements.size,
+    elementCount: canvas.elements.size,
     timestamp: new Date().toISOString(),
     memoryUsage: {
       heapUsed: Math.round(process.memoryUsage().heapUsed / 1024 / 1024), // MB

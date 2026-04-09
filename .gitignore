@@ -19,5 +19,7 @@ public/dist/
 
 # Development artifacts
 *.excalidraw
+.excalidraw-server-port
+.excalidraw-server-pid
 
 docs/

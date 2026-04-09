@@ -18,6 +18,7 @@ import {
 import { z } from 'zod';
 import dotenv from 'dotenv';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import logger from './utils/logger.js';
 import {
@@ -34,15 +35,20 @@ import fetch from 'node-fetch';
 dotenv.config();
 
 // Safe file path validation to prevent path traversal attacks
-const ALLOWED_EXPORT_DIR = process.env.EXCALIDRAW_EXPORT_DIR || process.cwd();
+const ALLOWED_EXPORT_DIRS = (process.env.EXCALIDRAW_EXPORT_DIR || process.cwd())
+  .split(path.delimiter)
+  .concat([os.tmpdir(), '/tmp'])
+  .map(d => path.resolve(d));
 
 function sanitizeFilePath(filePath: string): string {
   const resolved = path.resolve(filePath);
-  const allowedDir = path.resolve(ALLOWED_EXPORT_DIR);
-  if (!resolved.startsWith(allowedDir + path.sep) && resolved !== allowedDir) {
+  const allowed = ALLOWED_EXPORT_DIRS.some(dir =>
+    resolved.startsWith(dir + path.sep) || resolved === dir
+  );
+  if (!allowed) {
     throw new Error(
-      `Path traversal blocked: "${filePath}" resolves outside the allowed directory "${allowedDir}". ` +
-      `Set EXCALIDRAW_EXPORT_DIR to change the allowed base directory.`
+      `Path traversal blocked: "${filePath}" resolves outside allowed directories. ` +
+      `Set EXCALIDRAW_EXPORT_DIR to add more allowed directories (${path.delimiter}-separated).`
     );
   }
   return resolved;
@@ -51,6 +57,14 @@ function sanitizeFilePath(filePath: string): string {
 // Express server configuration
 const EXPRESS_SERVER_URL = process.env.EXPRESS_SERVER_URL || 'http://localhost:3000';
 const ENABLE_CANVAS_SYNC = process.env.ENABLE_CANVAS_SYNC !== 'false'; // Default to true
+const CANVAS_ID = process.env.CANVAS_ID || 'default';
+
+// Append canvasId query param to API URLs for multi-canvas support
+function withCanvasId(url: string): string {
+  if (CANVAS_ID === 'default') return url;
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}canvasId=${encodeURIComponent(CANVAS_ID)}`;
+}
 
 // API Response types
 interface ApiResponse {
@@ -110,12 +124,22 @@ async function syncToCanvas(operation: string, data: any): Promise<SyncResponse 
           body: JSON.stringify({ elements: data })
         };
         break;
-        
+
+      case 'batch_update':
+        url = `${EXPRESS_SERVER_URL}/api/elements/batch-update`;
+        options = {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ elements: data })
+        };
+        break;
+
       default:
         logger.warn(`Unknown sync operation: ${operation}`);
         return null;
     }
 
+    url = withCanvasId(url);
     logger.debug(`Syncing to canvas: ${operation}`, { url, data });
     const response = await fetch(url, options);
 
@@ -161,6 +185,12 @@ async function batchCreateElementsOnCanvas(elementsData: ServerElement[]): Promi
   return result?.elements || elementsData;
 }
 
+// Helper to sync batch updates to canvas
+async function batchUpdateElementsOnCanvas(updates: Array<Partial<ServerElement> & { id: string }>): Promise<ServerElement[] | null> {
+  const result = await syncToCanvas('batch_update', updates);
+  return result?.elements || null;
+}
+
 // Helper to fetch element from canvas
 async function getElementFromCanvas(elementId: string): Promise<ServerElement | null> {
   if (!ENABLE_CANVAS_SYNC) {
@@ -169,7 +199,7 @@ async function getElementFromCanvas(elementId: string): Promise<ServerElement | 
   }
 
   try {
-    const response = await fetch(`${EXPRESS_SERVER_URL}/api/elements/${elementId}`);
+    const response = await fetch(withCanvasId(`${EXPRESS_SERVER_URL}/api/elements/${elementId}`));
     if (!response.ok) {
       logger.warn(`Failed to fetch element ${elementId}: ${response.status}`);
       return null;
@@ -237,6 +267,7 @@ const ElementSchema = z.object({
   endElementId: z.string().optional(),
   endArrowhead: z.string().optional(),
   startArrowhead: z.string().optional(),
+  labelPosition: z.enum(['center', 'top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-center', 'bottom-right']).optional(),
 });
 
 const ElementIdSchema = z.object({
@@ -343,6 +374,46 @@ const DIAGRAM_DESIGN_GUIDE = `# Excalidraw Diagram Design Guide
 - Arrows: use start/end arrowheads to show cardinality
 - Colors: light-blue fill for entities, no fill for junction tables
 
+### Ready-to-Use Layout Blueprints
+
+#### 3-Tier Architecture (Frontend → Backend → Database)
+\`\`\`json
+{"elements": [
+  {"type": "rectangle", "x": 200, "y": 50,  "width": 400, "height": 80, "text": "Frontend", "backgroundColor": "#a5d8ff", "strokeColor": "#1971c2"},
+  {"type": "rectangle", "x": 200, "y": 230, "width": 400, "height": 80, "text": "Backend API", "backgroundColor": "#b2f2bb", "strokeColor": "#2f9e44"},
+  {"type": "rectangle", "x": 200, "y": 410, "width": 400, "height": 80, "text": "Database", "backgroundColor": "#ffd8a8", "strokeColor": "#e8590c"},
+  {"type": "arrow", "startElementId": "frontend", "endElementId": "backend"},
+  {"type": "arrow", "startElementId": "backend", "endElementId": "database"}
+]}
+\`\`\`
+Spacing: 100px vertical gap between tiers. All boxes same width for alignment.
+
+#### Hub-and-Spoke (API Gateway + 4 Services)
+\`\`\`json
+{"elements": [
+  {"type": "rectangle", "x": 300, "y": 200, "width": 200, "height": 100, "text": "API Gateway", "backgroundColor": "#a5d8ff", "strokeColor": "#1971c2"},
+  {"type": "rectangle", "x": 50,  "y": 50,  "width": 160, "height": 80, "text": "Auth Service", "backgroundColor": "#b2f2bb", "strokeColor": "#2f9e44"},
+  {"type": "rectangle", "x": 590, "y": 50,  "width": 160, "height": 80, "text": "User Service", "backgroundColor": "#b2f2bb", "strokeColor": "#2f9e44"},
+  {"type": "rectangle", "x": 50,  "y": 370, "width": 160, "height": 80, "text": "Order Service", "backgroundColor": "#eebefa", "strokeColor": "#9c36b5"},
+  {"type": "rectangle", "x": 590, "y": 370, "width": 160, "height": 80, "text": "Payment Service", "backgroundColor": "#eebefa", "strokeColor": "#9c36b5"}
+]}
+\`\`\`
+Hub centered at (300,200). Spokes at corners with 100+px clearance.
+
+#### Pipeline / Flow (4 stages left-to-right)
+\`\`\`json
+{"elements": [
+  {"type": "rectangle", "x": 50,  "y": 100, "width": 160, "height": 80, "text": "Ingest", "backgroundColor": "#a5d8ff"},
+  {"type": "rectangle", "x": 270, "y": 100, "width": 160, "height": 80, "text": "Transform", "backgroundColor": "#b2f2bb"},
+  {"type": "rectangle", "x": 490, "y": 100, "width": 160, "height": 80, "text": "Validate", "backgroundColor": "#ffd8a8"},
+  {"type": "rectangle", "x": 710, "y": 100, "width": 160, "height": 80, "text": "Store", "backgroundColor": "#eebefa"},
+  {"type": "arrow", "startElementId": "ingest", "endElementId": "transform"},
+  {"type": "arrow", "startElementId": "transform", "endElementId": "validate"},
+  {"type": "arrow", "startElementId": "validate", "endElementId": "store"}
+]}
+\`\`\`
+Spacing: 60px horizontal gap between stages. All boxes same height on same y.
+
 ## Anti-Patterns to Avoid
 
 1. **Overlapping elements** — always leave gaps; use distribute_elements
@@ -392,7 +463,8 @@ const tools: Tool[] = [
         startElementId: { type: 'string', description: 'For arrows: ID of the element to bind the arrow start to. Arrow auto-routes to element edge.' },
         endElementId: { type: 'string', description: 'For arrows: ID of the element to bind the arrow end to. Arrow auto-routes to element edge.' },
         endArrowhead: { type: 'string', description: 'Arrowhead style at end: arrow, bar, dot, triangle, or null' },
-        startArrowhead: { type: 'string', description: 'Arrowhead style at start: arrow, bar, dot, triangle, or null' }
+        startArrowhead: { type: 'string', description: 'Arrowhead style at start: arrow, bar, dot, triangle, or null' },
+        labelPosition: { type: 'string', enum: ['center', 'top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-center', 'bottom-right'], description: 'Position for the label text. "center" (default) creates a bound centered label. Other values create a free-standing text element at that position relative to the shape.' }
       },
       required: ['type', 'x', 'y']
     }
@@ -623,10 +695,45 @@ const tools: Tool[] = [
               startElementId: { type: 'string', description: 'For arrows: ID of element to bind arrow start to' },
               endElementId: { type: 'string', description: 'For arrows: ID of element to bind arrow end to' },
               endArrowhead: { type: 'string', description: 'Arrowhead style at end: arrow, bar, dot, triangle, or null' },
-              startArrowhead: { type: 'string', description: 'Arrowhead style at start: arrow, bar, dot, triangle, or null' }
+              startArrowhead: { type: 'string', description: 'Arrowhead style at start: arrow, bar, dot, triangle, or null' },
+              labelPosition: { type: 'string', enum: ['center', 'top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-center', 'bottom-right'], description: 'Position for the label text. "center" (default) creates a bound centered label. Other values create a free-standing text element at that position relative to the shape.' }
             },
             required: ['type', 'x', 'y']
           }
+        }
+      },
+      required: ['elements']
+    }
+  },
+  {
+    name: 'batch_update_elements',
+    description: 'Update multiple existing Excalidraw elements in one call. Each element must include an id and the fields to update.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        elements: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', description: 'ID of element to update' },
+              x: { type: 'number' },
+              y: { type: 'number' },
+              width: { type: 'number' },
+              height: { type: 'number' },
+              backgroundColor: { type: 'string' },
+              strokeColor: { type: 'string' },
+              strokeWidth: { type: 'number' },
+              strokeStyle: { type: 'string' },
+              roughness: { type: 'number' },
+              opacity: { type: 'number' },
+              text: { type: 'string' },
+              fontSize: { type: 'number' },
+              fontFamily: { type: ['string', 'number'] }
+            },
+            required: ['id']
+          },
+          description: 'Array of elements to update, each with id and fields to change'
         }
       },
       required: ['elements']
@@ -822,6 +929,16 @@ const tools: Tool[] = [
     }
   },
   {
+    name: 'undo',
+    description: 'Undo the last action on the canvas. Requires a browser frontend connection.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'redo',
+    description: 'Redo the last undone action on the canvas. Requires a browser frontend connection.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
     name: 'get_canvas_url',
     description: 'Get the URL to open this session\'s Excalidraw canvas in a browser.',
     inputSchema: {
@@ -901,30 +1018,84 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
           (element as any).points = [[0, 0], [100, 0]];
         }
 
-        // Convert text to label format for Excalidraw
-        const excalidrawElement = convertTextToLabel(element);
+        // Handle labelPosition: create free-standing text element if non-center
+        const labelPos = (element as any).labelPosition;
+        const textContent = (element as any).text;
+
+        if (labelPos && labelPos !== 'center' && textContent && element.type !== 'text' && element.type !== 'arrow' && element.type !== 'line') {
+          const { text: _t, labelPosition: _lp, ...shapeProps } = element as any;
+          const shapeElement = shapeProps as ServerElement;
+
+          const padding = 10;
+          const shapeX = element.x;
+          const shapeY = element.y;
+          const shapeW = element.width || 160;
+          const shapeH = element.height || 80;
+
+          let textX = shapeX + padding;
+          let textY = shapeY + padding;
+
+          switch (labelPos) {
+            case 'top-left': textX = shapeX + padding; textY = shapeY + padding; break;
+            case 'top-center': textX = shapeX + shapeW / 4; textY = shapeY + padding; break;
+            case 'top-right': textX = shapeX + shapeW - padding - 100; textY = shapeY + padding; break;
+            case 'bottom-left': textX = shapeX + padding; textY = shapeY + shapeH - padding - 24; break;
+            case 'bottom-center': textX = shapeX + shapeW / 4; textY = shapeY + shapeH - padding - 24; break;
+            case 'bottom-right': textX = shapeX + shapeW - padding - 100; textY = shapeY + shapeH - padding - 24; break;
+          }
+
+          const textElement: ServerElement = {
+            id: generateId(),
+            type: 'text' as ExcalidrawElementType,
+            x: textX,
+            y: textY,
+            width: shapeW / 2,
+            height: 24,
+            text: textContent,
+            fontSize: (element as any).fontSize || 16,
+            fontFamily: normalizeFontFamily((element as any).fontFamily) || 1,
+          };
+
+          const canvasElements = await batchCreateElementsOnCanvas([shapeElement, textElement]);
+          if (!canvasElements) {
+            throw new Error('Failed to create element: HTTP server unavailable');
+          }
+
+          logger.info('Element with labelPosition created via MCP', { id: shapeElement.id, labelPos });
+
+          return {
+            content: [{
+              type: 'text',
+              text: `Element created with free-standing label!\n\n${JSON.stringify(canvasElements, null, 2)}\n\n✅ Synced to canvas`
+            }]
+          };
+        }
+
+        // Convert text to label format for Excalidraw (strip labelPosition if present)
+        const { labelPosition: _lp2, ...cleanElement } = element as any;
+        const excalidrawElement = convertTextToLabel(cleanElement as ServerElement);
 
         // Create element directly on HTTP server (no local storage)
         const canvasElement = await createElementOnCanvas(excalidrawElement);
-        
+
         if (!canvasElement) {
           throw new Error('Failed to create element: HTTP server unavailable');
         }
-        
-        logger.info('Element created via MCP and synced to canvas', { 
-          id: excalidrawElement.id, 
+
+        logger.info('Element created via MCP and synced to canvas', {
+          id: excalidrawElement.id,
           type: excalidrawElement.type,
-          synced: !!canvasElement 
+          synced: !!canvasElement
         });
-        
+
         return {
-          content: [{ 
-            type: 'text', 
-            text: `Element created successfully!\n\n${JSON.stringify(canvasElement, null, 2)}\n\n✅ Synced to canvas` 
+          content: [{
+            type: 'text',
+            text: `Element created successfully!\n\n${JSON.stringify(canvasElement, null, 2)}\n\n✅ Synced to canvas`
           }]
         };
       }
-      
+
       case 'update_element': {
         const params = ElementIdSchema.merge(ElementSchema.partial()).parse(args);
         const { id, points: rawPoints, ...updates } = params;
@@ -1004,7 +1175,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
           }
           
           // Query elements from HTTP server
-          const url = `${EXPRESS_SERVER_URL}/api/elements/search?${queryParams}`;
+          const url = withCanvasId(`${EXPRESS_SERVER_URL}/api/elements/search?${queryParams}`);
           const response = await fetch(url);
           
           if (!response.ok) {
@@ -1040,7 +1211,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
           case 'elements':
             try {
               // Get elements from HTTP server
-              const response = await fetch(`${EXPRESS_SERVER_URL}/api/elements`);
+              const response = await fetch(withCanvasId(`${EXPRESS_SERVER_URL}/api/elements`));
               if (!response.ok) {
                 throw new Error(`HTTP server error: ${response.status} ${response.statusText}`);
               }
@@ -1345,7 +1516,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         try {
           // Send the Mermaid diagram to the frontend via the API
           // The frontend will use mermaid-to-excalidraw to convert it
-          const response = await fetch(`${EXPRESS_SERVER_URL}/api/elements/from-mermaid`, {
+          const response = await fetch(withCanvasId(`${EXPRESS_SERVER_URL}/api/elements/from-mermaid`), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1410,7 +1581,54 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
           createdElements.push(excalidrawElement);
         }
 
-        const canvasElements = await batchCreateElementsOnCanvas(createdElements);
+        // Expand elements with labelPosition into shape + free-standing text
+        const expandedElements: ServerElement[] = [];
+        for (const el of createdElements) {
+          const labelPos = (el as any).labelPosition;
+          const textContent = (el as any).text;
+
+          if (labelPos && labelPos !== 'center' && textContent && el.type !== 'text' && el.type !== 'arrow' && el.type !== 'line') {
+            const { text: _t, labelPosition: _lp, ...shapeProps } = el as any;
+            expandedElements.push(shapeProps as ServerElement);
+
+            const padding = 10;
+            const shapeX = el.x;
+            const shapeY = el.y;
+            const shapeW = el.width || 160;
+            const shapeH = el.height || 80;
+
+            let textX = shapeX + padding;
+            let textY = shapeY + padding;
+
+            switch (labelPos) {
+              case 'top-left': textX = shapeX + padding; textY = shapeY + padding; break;
+              case 'top-center': textX = shapeX + shapeW / 4; textY = shapeY + padding; break;
+              case 'top-right': textX = shapeX + shapeW - padding - 100; textY = shapeY + padding; break;
+              case 'bottom-left': textX = shapeX + padding; textY = shapeY + shapeH - padding - 24; break;
+              case 'bottom-center': textX = shapeX + shapeW / 4; textY = shapeY + shapeH - padding - 24; break;
+              case 'bottom-right': textX = shapeX + shapeW - padding - 100; textY = shapeY + shapeH - padding - 24; break;
+            }
+
+            const textElement: ServerElement = {
+              id: generateId(),
+              type: 'text' as ExcalidrawElementType,
+              x: textX,
+              y: textY,
+              width: shapeW / 2,
+              height: 24,
+              text: textContent,
+              fontSize: (el as any).fontSize || 16,
+              fontFamily: normalizeFontFamily((el as any).fontFamily) || 1,
+            };
+            expandedElements.push(textElement);
+          } else {
+            // Strip labelPosition before sending to canvas
+            const { labelPosition: _lp, ...cleanEl } = el as any;
+            expandedElements.push(cleanEl as ServerElement);
+          }
+        }
+
+        const canvasElements = await batchCreateElementsOnCanvas(expandedElements);
 
         if (!canvasElements) {
           throw new Error('Failed to batch create elements: HTTP server unavailable');
@@ -1436,6 +1654,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         };
       }
 
+      case 'batch_update_elements': {
+        const params = z.object({
+          elements: z.array(ElementIdSchema.merge(ElementSchema.partial()))
+        }).parse(args);
+
+        const canvasElements = await batchUpdateElementsOnCanvas(params.elements as Array<Partial<ServerElement> & { id: string }>);
+
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              success: true,
+              updatedCount: canvasElements?.length ?? params.elements.length,
+              elements: canvasElements || params.elements
+            }, null, 2)
+          }]
+        };
+      }
+
       case 'get_element': {
         const params = ElementIdSchema.parse(args);
         const { id } = params;
@@ -1453,7 +1690,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
       case 'clear_canvas': {
         logger.info('Clearing canvas via MCP');
 
-        const response = await fetch(`${EXPRESS_SERVER_URL}/api/elements/clear`, {
+        const response = await fetch(withCanvasId(`${EXPRESS_SERVER_URL}/api/elements/clear`), {
           method: 'DELETE'
         });
 
@@ -1478,7 +1715,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
 
         logger.info('Exporting scene via MCP');
 
-        const response = await fetch(`${EXPRESS_SERVER_URL}/api/elements`);
+        const response = await fetch(withCanvasId(`${EXPRESS_SERVER_URL}/api/elements`));
         if (!response.ok) {
           throw new Error(`Failed to fetch elements: ${response.status} ${response.statusText}`);
         }
@@ -1489,7 +1726,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         // Fetch files for image elements
         let sceneFiles: Record<string, any> = {};
         try {
-          const filesResponse = await fetch(`${EXPRESS_SERVER_URL}/api/files`);
+          const filesResponse = await fetch(withCanvasId(`${EXPRESS_SERVER_URL}/api/files`));
           if (filesResponse.ok) {
             const filesData = await filesResponse.json() as any;
             sceneFiles = filesData.files || {};
@@ -1560,7 +1797,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
 
         // If replace mode, clear first
         if (params.mode === 'replace') {
-          await fetch(`${EXPRESS_SERVER_URL}/api/elements/clear`, { method: 'DELETE' });
+          await fetch(withCanvasId(`${EXPRESS_SERVER_URL}/api/elements/clear`), { method: 'DELETE' });
         }
 
         // Batch create the imported elements
@@ -1581,7 +1818,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
           const fileList = Object.values(importFiles);
           if (fileList.length > 0) {
             try {
-              await fetch(`${EXPRESS_SERVER_URL}/api/files`, {
+              await fetch(withCanvasId(`${EXPRESS_SERVER_URL}/api/files`), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(fileList)
@@ -1608,7 +1845,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
 
         logger.info('Exporting to image via MCP', { format: params.format });
 
-        const response = await fetch(`${EXPRESS_SERVER_URL}/api/export/image`, {
+        const response = await fetch(withCanvasId(`${EXPRESS_SERVER_URL}/api/export/image`), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1700,7 +1937,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         const params = z.object({ name: z.string() }).parse(args);
         logger.info('Saving snapshot via MCP', { name: params.name });
 
-        const response = await fetch(`${EXPRESS_SERVER_URL}/api/snapshots`, {
+        const response = await fetch(withCanvasId(`${EXPRESS_SERVER_URL}/api/snapshots`), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: params.name })
@@ -1725,7 +1962,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         logger.info('Restoring snapshot via MCP', { name: params.name });
 
         // Fetch the snapshot
-        const response = await fetch(`${EXPRESS_SERVER_URL}/api/snapshots/${encodeURIComponent(params.name)}`);
+        const response = await fetch(withCanvasId(`${EXPRESS_SERVER_URL}/api/snapshots/${encodeURIComponent(params.name)}`));
         if (!response.ok) {
           throw new Error(`Snapshot "${params.name}" not found`);
         }
@@ -1733,7 +1970,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         const data = await response.json() as { success: boolean; snapshot: { name: string; elements: ServerElement[]; createdAt: string } };
 
         // Clear current canvas
-        await fetch(`${EXPRESS_SERVER_URL}/api/elements/clear`, { method: 'DELETE' });
+        await fetch(withCanvasId(`${EXPRESS_SERVER_URL}/api/elements/clear`), { method: 'DELETE' });
 
         // Restore elements
         const canvasElements = await batchCreateElementsOnCanvas(data.snapshot.elements);
@@ -1749,7 +1986,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
       case 'describe_scene': {
         logger.info('Describing scene via MCP');
 
-        const response = await fetch(`${EXPRESS_SERVER_URL}/api/elements`);
+        const response = await fetch(withCanvasId(`${EXPRESS_SERVER_URL}/api/elements`));
         if (!response.ok) {
           throw new Error(`Failed to fetch elements: ${response.status}`);
         }
@@ -1864,7 +2101,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
 
         logger.info('Taking canvas screenshot via MCP');
 
-        const response = await fetch(`${EXPRESS_SERVER_URL}/api/export/image`, {
+        const response = await fetch(withCanvasId(`${EXPRESS_SERVER_URL}/api/export/image`), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1905,7 +2142,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         logger.info('Exporting to excalidraw.com URL');
 
         // 1. Fetch current scene elements
-        const urlExportResponse = await fetch(`${EXPRESS_SERVER_URL}/api/elements`);
+        const urlExportResponse = await fetch(withCanvasId(`${EXPRESS_SERVER_URL}/api/elements`));
         if (!urlExportResponse.ok) {
           throw new Error(`Failed to fetch elements: ${urlExportResponse.status}`);
         }
@@ -2202,7 +2439,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
 
         logger.info('Setting viewport via MCP', viewportParams);
 
-        const viewportResponse = await fetch(`${EXPRESS_SERVER_URL}/api/viewport`, {
+        const viewportResponse = await fetch(withCanvasId(`${EXPRESS_SERVER_URL}/api/viewport`), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(viewportParams)
@@ -2223,9 +2460,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         };
       }
 
+      case 'undo': {
+        const undoResponse = await fetch(withCanvasId(`${EXPRESS_SERVER_URL}/api/undo`), { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+        const undoResult = await undoResponse.json() as any;
+        return {
+          content: [{ type: 'text', text: JSON.stringify(undoResult, null, 2) }]
+        };
+      }
+
+      case 'redo': {
+        const redoResponse = await fetch(withCanvasId(`${EXPRESS_SERVER_URL}/api/redo`), { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+        const redoResult = await redoResponse.json() as any;
+        return {
+          content: [{ type: 'text', text: JSON.stringify(redoResult, null, 2) }]
+        };
+      }
+
       case 'get_canvas_url': {
         return {
-          content: [{ type: 'text', text: `Canvas URL: ${EXPRESS_SERVER_URL}` }]
+          content: [{ type: 'text', text: `Canvas URL: ${EXPRESS_SERVER_URL}${CANVAS_ID !== 'default' ? `/?canvasId=${CANVAS_ID}` : ''}` }]
         };
       }
 
