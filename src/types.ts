@@ -186,7 +186,9 @@ export type WebSocketMessageType =
   | 'export_image_request'
   | 'set_viewport'
   | 'files_added'
-  | 'file_deleted';
+  | 'file_deleted'
+  | 'undo_request'
+  | 'redo_request';
 
 export interface InitialElementsMessage extends WebSocketMessage {
   type: 'initial_elements';
@@ -296,6 +298,47 @@ export interface ExcalidrawFile {
   created: number;
 }
 export const files = new Map<string, ExcalidrawFile>();
+
+// Canvas: a self-contained drawing workspace
+export interface Canvas {
+  id: string;
+  elements: Map<string, ServerElement>;
+  files: Map<string, ExcalidrawFile>;
+  snapshots: Map<string, Snapshot>;
+  createdAt: string;
+  lastAccessedAt: string;
+}
+
+// All canvases — "default" is created on startup
+export const canvases = new Map<string, Canvas>();
+
+// Initialize default canvas using existing global maps
+canvases.set('default', {
+  id: 'default',
+  elements,
+  files,
+  snapshots,
+  createdAt: new Date().toISOString(),
+  lastAccessedAt: new Date().toISOString(),
+});
+
+// Get or create a canvas by ID
+export function getCanvas(canvasId: string = 'default'): Canvas {
+  let canvas = canvases.get(canvasId);
+  if (!canvas) {
+    canvas = {
+      id: canvasId,
+      elements: new Map(),
+      files: new Map(),
+      snapshots: new Map(),
+      createdAt: new Date().toISOString(),
+      lastAccessedAt: new Date().toISOString(),
+    };
+    canvases.set(canvasId, canvas);
+  }
+  canvas.lastAccessedAt = new Date().toISOString();
+  return canvas;
+}
 
 // Validation function for Excalidraw elements
 export function validateElement(element: Partial<ServerElement>): element is ServerElement {

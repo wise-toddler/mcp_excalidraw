@@ -80,6 +80,13 @@ interface ApiResponse {
 type SyncStatus = 'idle' | 'syncing' | 'success' | 'error';
 const AUTO_SYNC_DEBOUNCE_MS = 1200;
 
+// Append canvasId query param to API URLs for multi-canvas support
+function withCanvasId(url: string, canvasId: string): string {
+  if (canvasId === 'default') return url;
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}canvasId=${encodeURIComponent(canvasId)}`;
+}
+
 // Helper function to clean elements for Excalidraw
 const cleanElementForExcalidraw = (element: ServerElement): Partial<ExcalidrawElement> => {
   const {
@@ -265,6 +272,10 @@ const convertElementsPreservingImageProps = (
 }
 
 function App(): JSX.Element {
+  // Extract canvasId from URL query param for multi-canvas support
+  const urlParams = new URLSearchParams(window.location.search);
+  const canvasId = urlParams.get('canvasId') || 'default';
+
   const [excalidrawAPI, setExcalidrawAPI] = useState<ExcalidrawAPIRefValue | null>(null)
   // Ref so WS message handlers (captured in stale closures) always see the latest API instance
   const excalidrawAPIRef = useRef<ExcalidrawAPIRefValue | null>(null)
@@ -325,7 +336,7 @@ function App(): JSX.Element {
 
   const loadExistingElements = async (): Promise<void> => {
     try {
-      const response = await fetch('/api/elements')
+      const response = await fetch(withCanvasId('/api/elements', canvasId))
       const result: ApiResponse = await response.json()
 
       if (result.success && result.elements && result.elements.length > 0) {
@@ -339,7 +350,7 @@ function App(): JSX.Element {
         }
       }
 
-      const filesResponse = await fetch('/api/files')
+      const filesResponse = await fetch(withCanvasId('/api/files', canvasId))
       if (filesResponse.ok) {
         const filesResult = await filesResponse.json() as ApiResponse
         if (filesResult.files) {
@@ -357,7 +368,7 @@ function App(): JSX.Element {
     }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${protocol}//${window.location.host}`
+    const wsUrl = `${protocol}//${window.location.host}?canvasId=${encodeURIComponent(canvasId)}`
 
     websocketRef.current = new WebSocket(wsUrl)
 
@@ -516,7 +527,7 @@ function App(): JSX.Element {
                   files
                 })
                 const svgString = new XMLSerializer().serializeToString(svg)
-                await fetch('/api/export/image/result', {
+                await fetch(withCanvasId('/api/export/image/result', canvasId), {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
@@ -543,7 +554,7 @@ function App(): JSX.Element {
                     if (!base64) {
                       throw new Error('Could not extract base64 data from result')
                     }
-                    await fetch('/api/export/image/result', {
+                    await fetch(withCanvasId('/api/export/image/result', canvasId), {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({
@@ -554,7 +565,7 @@ function App(): JSX.Element {
                     })
                   } catch (readerError) {
                     console.error('Image export (FileReader) failed:', readerError)
-                    await fetch('/api/export/image/result', {
+                    await fetch(withCanvasId('/api/export/image/result', canvasId), {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({
@@ -566,7 +577,7 @@ function App(): JSX.Element {
                 }
                 reader.onerror = async () => {
                   console.error('FileReader error:', reader.error)
-                  await fetch('/api/export/image/result', {
+                  await fetch(withCanvasId('/api/export/image/result', canvasId), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -579,7 +590,7 @@ function App(): JSX.Element {
               }
             } catch (exportError) {
               console.error('Image export failed:', exportError)
-              await fetch('/api/export/image/result', {
+              await fetch(withCanvasId('/api/export/image/result', canvasId), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -625,7 +636,7 @@ function App(): JSX.Element {
                 }
               }
 
-              await fetch('/api/viewport/result', {
+              await fetch(withCanvasId('/api/viewport/result', canvasId), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -636,7 +647,7 @@ function App(): JSX.Element {
               })
             } catch (viewportError) {
               console.error('Viewport control failed:', viewportError)
-              await fetch('/api/viewport/result', {
+              await fetch(withCanvasId('/api/viewport/result', canvasId), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -647,6 +658,45 @@ function App(): JSX.Element {
             }
           }
           break
+
+        case 'undo_request': {
+          const undoRequestId = (data as any).requestId;
+          try {
+            // Dispatch Ctrl+Z keyboard event to trigger Excalidraw's built-in undo action
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', code: 'KeyZ', ctrlKey: true, bubbles: true }));
+            fetch(withCanvasId('/api/history/result', canvasId), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ requestId: undoRequestId, success: true, message: 'Undo completed' })
+            });
+          } catch (err) {
+            fetch(withCanvasId('/api/history/result', canvasId), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ requestId: undoRequestId, error: (err as Error).message })
+            });
+          }
+          break;
+        }
+        case 'redo_request': {
+          const redoRequestId = (data as any).requestId;
+          try {
+            // Dispatch Ctrl+Shift+Z keyboard event to trigger Excalidraw's built-in redo action
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', code: 'KeyZ', ctrlKey: true, shiftKey: true, bubbles: true }));
+            fetch(withCanvasId('/api/history/result', canvasId), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ requestId: redoRequestId, success: true, message: 'Redo completed' })
+            });
+          } catch (err) {
+            fetch(withCanvasId('/api/history/result', canvasId), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ requestId: redoRequestId, error: (err as Error).message })
+            });
+          }
+          break;
+        }
 
         case 'mermaid_convert':
           console.log('Received Mermaid conversion request from MCP')
@@ -741,7 +791,7 @@ function App(): JSX.Element {
       const backendElements = activeElements.map(convertToBackendFormat)
 
       // 4. Send to backend
-      const response = await fetch('/api/elements/sync', {
+      const response = await fetch(withCanvasId('/api/elements/sync', canvasId), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -806,12 +856,12 @@ function App(): JSX.Element {
     if (excalidrawAPI) {
       try {
         // Get all current elements and delete them from backend
-        const response = await fetch('/api/elements')
+        const response = await fetch(withCanvasId('/api/elements', canvasId))
         const result: ApiResponse = await response.json()
 
         if (result.success && result.elements) {
           const deletePromises = result.elements.map(element =>
-            fetch(`/api/elements/${element.id}`, { method: 'DELETE' })
+            fetch(withCanvasId(`/api/elements/${element.id}`, canvasId), { method: 'DELETE' })
           )
           await Promise.all(deletePromises)
         }
