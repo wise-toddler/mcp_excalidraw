@@ -49,7 +49,7 @@ app.use(express.json({ limit: '10mb' }));
 
 // Redirect / to /canvases when multiple canvases exist (before static files)
 app.use((req: Request, res: Response, next: NextFunction) => {
-  if (req.path === '/' && !req.query.canvasId && canvases.size > 1) {
+  if (req.path === '/' && !req.query.canvasId) {
     return res.redirect('/canvases');
   }
   next();
