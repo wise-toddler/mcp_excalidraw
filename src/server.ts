@@ -93,13 +93,15 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
   });
 });
 
-// Start server
-const PORT = parseInt(process.env.PORT || '3000', 10);
-const HOST = process.env.HOST || 'localhost';
+// Start server (skip when running tests)
+if (process.env.NODE_ENV !== 'test') {
+  const PORT = parseInt(process.env.PORT || '3000', 10);
+  const HOST = process.env.HOST || 'localhost';
 
-server.listen(PORT, HOST, () => {
-  logger.info(`POC server running on http://${HOST}:${PORT}`);
-  logger.info(`WebSocket server running on ws://${HOST}:${PORT}`);
-});
+  server.listen(PORT, HOST, () => {
+    logger.info(`POC server running on http://${HOST}:${PORT}`);
+    logger.info(`WebSocket server running on ws://${HOST}:${PORT}`);
+  });
+}
 
 export default app;
