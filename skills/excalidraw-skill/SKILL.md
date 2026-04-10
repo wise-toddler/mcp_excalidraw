@@ -248,7 +248,7 @@ Canvas screenshot captured.
 
 **Feedback loop (mcp-call):**
 ```
-mcp-call excalidraw-<port> batch_create_elements --json '...'
+mcp-call excalidraw-<port> batch_create_elements --input-json '...'
   → mcp-call excalidraw-<port> get_canvas_screenshot → read the printed .png path → "text truncated on auth-svc"
   → mcp-call excalidraw-<port> update_element --id=auth-svc --width=250 → screenshot again → "all checks pass"
   → proceed
