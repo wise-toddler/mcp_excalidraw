@@ -8,6 +8,7 @@ Live Excalidraw canvas controlled by AI agents via MCP tools. Draw, inspect, ite
 
 ## Install
 
+Works with Claude Code, Codex CLI, Cursor, and any skills-compatible agent:
 ```bash
 npx skills add wise-toddler/mcp_excalidraw@excalidraw-skill -g
 ```
