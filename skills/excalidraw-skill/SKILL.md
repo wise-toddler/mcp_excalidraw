@@ -140,13 +140,15 @@ Excalidraw diagrams are visual communication. If text is cut off, elements overl
 
 After each `batch_create_elements` / `POST /api/elements/batch`, take a screenshot and check:
 
-1. **Text truncation** — Is all label text fully visible? Truncated text means the shape is too small. Increase `width` and/or `height`.
-2. **Overlap** — Do any shapes share the same space? Background zones must fully contain children with padding.
-3. **Arrow crossing** — Do arrows cut through unrelated elements? If yes, route them around using curved or elbowed arrows (see Arrow Routing below).
-4. **Arrow-label overlap** — Arrow labels sit at the midpoint. If they overlap a shape, shorten the label or adjust the arrow path.
-5. **Spacing** — At least 40px gap between elements. Cramped layouts are hard to read.
-6. **Readability** — Font size ≥ 16 for body text, ≥ 20 for titles.
-7. **Zone label placement** — If you used `text`/`label.text` on a background zone rectangle, the zone label will be centered in the middle of the zone, overlapping everything inside. Fix: delete the bound text element and add a free-standing text element at the top of the zone instead (see Layout Anti-Patterns above).
+1. **Text-height fit (the #1 real cause of overlap)** — `0 rectangle overlap is NOT the bar.` Bound text that bleeds out of its own box into the one below is the actual problem. For each labeled box, verify `box.height >= renderedTextHeight + padding`. Estimate rendered height as `lineCount * 25 + 20`. If text wraps to more lines than the box is tall, it bleeds downward even when no rectangles intersect. Increase `height`.
+2. **Text truncation** — Is all label text horizontally visible? Truncated text means the box is too narrow. Increase `width`.
+3. **Overlap** — Do any shapes share the same space? Background zones must fully contain children with padding.
+4. **Arrow crossing** — Do arrows cut through unrelated elements? If yes, route them around using curved or elbowed arrows (see Arrow Routing below).
+5. **Arrow-label overlap** — Arrow labels sit at the midpoint. If they overlap a shape, shorten the label or adjust the arrow path.
+6. **Spacing** — Apply the GAP rule: `next.y = prev.y + prev.height + GAP` where `GAP >= 50`. Visible whitespace between boxes is the bar, not "they don't touch."
+7. **Readability** — Font size ≥ 16 for body text, ≥ 20 for titles.
+8. **Zone label placement** — If you used `text`/`label.text` on a background zone rectangle, the zone label will be centered in the middle of the zone, overlapping everything inside. Fix: delete the bound text element and add a free-standing text element at the top of the zone instead (see Layout Anti-Patterns above).
+9. **Duplicate labels** — If element counts look inflated or you see mixed-color text-on-text, a stale browser tab's auto-sync may have stacked duplicate bound text on a container. Use `describe_scene` to check for >1 text element per container; delete duplicates.
 
 If you find any issue: **stop, fix it, re-screenshot, then continue.** Say "I see [issue], fixing it" rather than glossing over problems. Only proceed once all checks pass.
 
@@ -323,6 +325,8 @@ curl -X POST http://localhost:$PORT/api/elements/from-mermaid \
 - Export to `.excalidraw`: `export_scene` with optional `filePath`
 - Import from `.excalidraw`: `import_scene` with `mode: "replace"` or `"merge"`
 - Export to image: `export_to_image` with `format: "png"` or `"svg"` (requires browser open)
+
+> **⚠ import_scene caveat:** A round-trip (`export_scene` → `import_scene`) currently strips arrow `startBinding`/`endBinding` and detaches label `containerId` — bound arrows become floating lines and labels become free text. After importing, re-verify arrows with `describe_scene` and re-create bindings if needed. Prefer keeping a generator script as source of truth over repeated round-trips.
 - Share link: `export_to_excalidraw_url` — encrypts scene, returns shareable excalidraw.com URL
 - CLI export: `node scripts/export-elements.cjs --out diagram.elements.json`
 - CLI import: `node scripts/import-elements.cjs --in diagram.elements.json --mode batch|sync`
@@ -345,6 +349,8 @@ curl -X POST http://localhost:$PORT/api/elements/from-mermaid \
 - **Element won't update?** It may be locked — call `unlock_elements` first.
 - **Layout looking wrong after import?** Use `describe_scene` to inspect actual positions, then batch-update positions.
 - **Duplicate text elements / element count doubling?** The frontend has an auto-sync timer that periodically sends the full Excalidraw scene back to the server (overwriting). Excalidraw internally generates a bound text element for every shape that has `label.text`. If you clear and re-send elements, Excalidraw may re-inject its cached bound texts, causing duplicates. To clean up: (1) use `query_elements` / `GET /api/elements` to find elements of `type: "text"` with a `containerId`; (2) delete the unwanted ones with `delete_element`; (3) wait a few seconds for auto-sync to settle before exporting. The safest approach is to **never put labels on background zone rectangles** — use free-standing text elements instead.
+- **Edits keep reverting? (auto-sync race)** A stale browser tab can push its full cached scene back to the server, overwriting your `update_element` edits and stacking duplicate bound text on a container (mixed-color text-on-text bleed, inflated element counts). For bulk edits on a long-lived canvas, treat your generator as the source of truth and rebuild the whole scene rather than many incremental `update_element` calls. If `update_element --text` with `\n` stores a literal backslash-n, pass real newlines via `--input-json`; if it still reverts, delete + re-create via `batch_create_elements` (the only reliable path).
+- **Wrong canvas / stale servers?** Stale `excalidraw-canvas-*` servers accumulate across sessions and all stay registered with `mcp-call`. Always target the exact server id and confirm element counts match what you expect (`describe_scene`) before editing.
 
 ---
 
