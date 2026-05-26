@@ -67,12 +67,29 @@ To get the canvas URL: `mcp-call excalidraw-<port> get_canvas_url`
 
 The canvas uses a 2D coordinate grid: **(0, 0) is the origin**, **x increases rightward**, **y increases downward**. Plan your layout before writing any JSON.
 
-**General spacing guidelines:**
-- Vertical spacing between tiers: 80–120px (enough that arrows don't crowd labels)
-- Horizontal spacing between siblings: 40–60px minimum
-- Shape width: `max(160, labelCharCount * 9)` to prevent text truncation
-- Shape height: 60px single-line, 80px two-line labels
-- Background/zone padding: 50px on all sides around contained elements
+**Sizing rules (MUST follow — text truncation is the #1 problem):**
+- Shape width: `max(200, longestLineChars * 10 + 40)` — always add 40px padding
+- Shape height: `max(70, lineCount * 28 + 20)` — 28px per line + padding
+- Ellipses need 50% more: `width * 1.5`, `height * 1.3` (text area is smaller than bounds)
+- Text elements: `width = charCount * 9`, `height = lineCount * 24`
+- Never use width < 200 or height < 70 for shapes with text
+
+**Spacing rules (MUST follow — overlap is the #2 problem):**
+- Vertical gap between tiers: **150px minimum** (not 80, not 100 — 150)
+- Horizontal gap between siblings: **60px minimum**
+- Between a section title and the boxes below it: **50px**
+- Between the last box of a section and the next section title: **100px**
+- Background/zone padding: **60px** on all sides around contained elements
+- Arrow length: at least **80px** between connected shapes
+
+**Quick formulas for Y positioning:**
+```
+tier_1_y = 100
+tier_2_y = tier_1_y + box_height + 150
+tier_3_y = tier_2_y + box_height + 150
+section_title_y = prev_section_bottom + 100
+section_boxes_y = section_title_y + 50
+```
 
 ---
 
