@@ -31,6 +31,8 @@ interface ServerElement {
   fontFamily?: string | number;
   label?: {
     text: string;
+    fontSize?: number;
+    fontFamily?: string | number;
   };
   createdAt?: string;
   updatedAt?: string;

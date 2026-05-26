@@ -19,7 +19,9 @@ export const CreateElementSchema = z.object({
   opacity: z.number().optional(),
   text: z.string().optional(),
   label: z.object({
-    text: z.string()
+    text: z.string(),
+    fontSize: z.number().optional(),
+    fontFamily: z.union([z.string(), z.number()]).optional()
   }).optional(),
   fontSize: z.number().optional(),
   fontFamily: z.union([z.string(), z.number()]).optional(),
@@ -75,7 +77,9 @@ export const UpdateElementSchema = z.object({
   text: z.string().optional(),
   originalText: z.string().optional(),
   label: z.object({
-    text: z.string()
+    text: z.string(),
+    fontSize: z.number().optional(),
+    fontFamily: z.union([z.string(), z.number()]).optional()
   }).optional(),
   fontSize: z.number().optional(),
   fontFamily: z.union([z.string(), z.number()]).optional(),

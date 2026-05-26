@@ -1,7 +1,7 @@
 import { Request } from 'express';
 import os from 'os';
 import path from 'path';
-import { ServerElement, elements } from './types.js';
+import { ServerElement, elements, normalizeFontFamily } from './types.js';
 
 // --- Helpers from server.ts ---
 
@@ -150,13 +150,28 @@ export function convertTextToLabel(element: ServerElement): ServerElement {
     if (element.type === 'text') {
       return element; // Keep text as direct property
     }
-    // For other elements (rectangle, ellipse, diamond), convert to label format
+    // For other elements (rectangle, ellipse, diamond), convert to label format.
+    // Propagate fontSize/fontFamily into the label — Excalidraw's convertToExcalidrawElements
+    // reads these from the label object, NOT the container shape. Without this the bound
+    // text renders at the default size regardless of the requested fontSize (issue #11).
+    const label: { text: string; fontSize?: number; fontFamily?: number } = { text };
+    if (element.fontSize !== undefined) label.fontSize = element.fontSize;
+    const ff = normalizeFontFamily(element.fontFamily);
+    if (ff !== undefined) label.fontFamily = ff;
     return {
       ...rest,
-      label: { text }
+      label
     } as ServerElement;
   }
   return element;
+}
+
+// Normalize a label's fontFamily to the numeric value Excalidraw expects.
+// Direct REST callers may pass a string fontFamily (e.g. "helvetica") on the label.
+export function normalizeLabel(label: ServerElement['label']): ServerElement['label'] {
+  if (!label) return label;
+  const ff = normalizeFontFamily(label.fontFamily);
+  return ff !== undefined ? { ...label, fontFamily: ff } : label;
 }
 
 // Safe file path validation to prevent path traversal attacks

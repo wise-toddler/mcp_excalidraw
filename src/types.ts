@@ -136,6 +136,8 @@ export interface ServerElement extends Omit<ExcalidrawElementBase, 'id'> {
   fontFamily?: string | number;
   label?: {
     text: string;
+    fontSize?: number;
+    fontFamily?: string | number;
   };
   points?: any;
   // Arrow element binding: connect arrows to shapes by element ID

@@ -13,7 +13,7 @@ import {
 } from '../types.js';
 import { CreateElementSchema, UpdateElementSchema } from '../schemas.js';
 import { broadcastToCanvas } from '../websocket.js';
-import { getCanvasId, resolveArrowBindings, normalizeLineBreakMarkup } from '../helpers.js';
+import { getCanvasId, resolveArrowBindings, normalizeLineBreakMarkup, normalizeLabel } from '../helpers.js';
 
 const router = Router();
 
@@ -50,6 +50,7 @@ router.post('/api/elements', (req: Request, res: Response) => {
       id,
       ...params,
       fontFamily: normalizeFontFamily(params.fontFamily),
+      label: normalizeLabel(params.label),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       version: 1
@@ -325,6 +326,7 @@ router.post('/api/elements/batch', (req: Request, res: Response) => {
         id,
         ...params,
         fontFamily: normalizeFontFamily(params.fontFamily),
+        label: normalizeLabel(params.label),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         version: 1

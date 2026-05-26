@@ -39,6 +39,18 @@ describe('convertTextToLabel', () => {
     const result = convertTextToLabel(element);
     expect(result).toEqual(element);
   });
+
+  it('propagates fontSize into the label (issue #11)', () => {
+    const element = { id: '1', type: 'rectangle', x: 0, y: 0, text: 'Hi', fontSize: 28 } as ServerElement;
+    const result = convertTextToLabel(element);
+    expect(result.label).toEqual({ text: 'Hi', fontSize: 28 });
+  });
+
+  it('normalizes fontFamily string into the label', () => {
+    const element = { id: '1', type: 'rectangle', x: 0, y: 0, text: 'Hi', fontFamily: 'mono' } as ServerElement;
+    const result = convertTextToLabel(element);
+    expect(result.label).toEqual({ text: 'Hi', fontFamily: 3 });
+  });
 });
 
 describe('sanitizeFilePath', () => {
