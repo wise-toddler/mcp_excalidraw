@@ -75,8 +75,10 @@ The canvas uses a 2D coordinate grid: **(0, 0) is the origin**, **x increases ri
 - Never use width < 200 or height < 70 for shapes with text
 
 **Spacing rules (MUST follow — overlap is the #2 problem):**
-- Vertical gap between tiers: **150px minimum** (not 80, not 100 — 150)
-- Horizontal gap between siblings: **60px minimum**
+> **Don't pick a number from a range — agents who do consistently pick the minimum, which is too tight in practice. The number IS the minimum. Use it.** Real-world feedback: builders given "80–150px" picked 30–60 and had to redo it 3+ times.
+
+- Vertical gap between tiers: **150px** (not 80, not 100 — 150)
+- Horizontal gap between siblings: **60px** AT LEAST, but for fan-out arrows compute it (see formula below)
 - Between a section title and the boxes below it: **50px**
 - Between the last box of a section and the next section title: **100px**
 - Background/zone padding: **60px** on all sides around contained elements
@@ -90,6 +92,14 @@ tier_3_y = tier_2_y + box_height + 150
 section_title_y = prev_section_bottom + 100
 section_boxes_y = section_title_y + 50
 ```
+
+**Horizontal sibling distribution — compute it explicitly:**
+For N sibling boxes of width W across a canvas of width C, evenly distribute:
+```
+gap = (C - N * W) / (N + 1)
+x_i = gap + i * (W + gap)   # for i = 0..N-1
+```
+Example: 4 boxes of width 440 across canvas width 2000 → gap = (2000 - 4×440)/5 = 48px each, x = 48, 536, 1024, 1512. **Fan-out arrows from a single source (like an OR-gate splitting to 4 branches) need this room to render visibly — uneven gaps (e.g. 55/28/40) make the arrows unreadable.**
 
 ---
 
@@ -298,6 +308,62 @@ POST /api/elements/batch
 3. `update_element` to resize/recolor/move; `delete_element` to remove.
 4. `get_canvas_screenshot` to confirm the change looks right.
 5. If updates fail: check the ID exists with `get_element`; check it's not locked with `unlock_elements`.
+
+> **Bound arrows auto-route on shift, but `describe_scene` reports stale arrow coords.** When you `update_element --y` an endpoint, the bound arrow re-routes visually but its reported `at (x, y)` in `describe_scene` does NOT update. Don't be fooled — verify with `get_canvas_screenshot`, not `describe_scene`, after shifting bound endpoints.
+
+---
+
+## Workflow: Bulk Shift (Cascade Rule)
+
+For 10+ position updates (e.g. "the third tier needs to move down 80px to make room"), **do NOT** issue 70 inline `update_element` calls. Use a generator pattern that takes 60s instead of 10 minutes.
+
+**The cascade rule:** when you shift tier T down by N px, EVERY element with `y > tier_T.y` must also shift down by N px — otherwise the lower content overlaps. Compute a tiered shift function, not a single delta.
+
+**The background-zone gotcha:** background `bg`/`zone` rectangles do NOT auto-resize when their contained content shifts. After a cascade shift, manually `update_element --height` on each zone to match new content extent, or you'll get a giant empty trailing region.
+
+**Pattern (Python + bash):**
+
+```bash
+# 1. Snapshot first (cheap undo)
+mcp-call excalidraw-<port> snapshot_scene --name pre-shift-1
+
+# 2. Dump current scene
+mcp-call excalidraw-<port> describe_scene > /tmp/scene.txt
+
+# 3. Python: parse + compute tiered shifts
+python3 - <<'PY' > /tmp/shifts.txt
+import re
+# Working regex (note `.*?` — `[^|]+` fails because `|` appears before `at` in the output)
+pattern = re.compile(r'\[([\w-]+)\]\s+\w+\s+\|\s+at \((\d+),\s*(\d+)\)')
+def shift_for(y):
+    if y < 950: return 0
+    elif y < 1620: return 50
+    elif y < 1786: return 120
+    elif y < 2100: return 180
+    else: return 220
+for line in open('/tmp/scene.txt'):
+    m = pattern.search(line)
+    if not m: continue
+    el_id, x, y = m.group(1), int(m.group(2)), int(m.group(3))
+    if int(x) >= 2000: continue   # skip sidebar column
+    delta = shift_for(y)
+    if delta:
+        print(f"{el_id}|{y + delta}")
+PY
+
+# 4. Apply via bash while-loop
+while IFS='|' read id newy; do
+  mcp-call excalidraw-<port> update_element --id "$id" --y "$newy"
+done < /tmp/shifts.txt
+
+# 5. Resize any background zones to match new content extent
+mcp-call excalidraw-<port> update_element --id zone-bg --height <new_height>
+
+# 6. Screenshot and verify
+mcp-call excalidraw-<port> get_canvas_screenshot
+```
+
+**If the shift breaks layout:** `restore_snapshot --name pre-shift-1` instantly reverts. Cost of snapshot: ~0.1s. Worth it every time.
 
 ---
 
