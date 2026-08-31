@@ -422,6 +422,26 @@ describe('Health & Status', () => {
   });
 });
 
+// ─── Browser-dependent routes (EXCALIDRAW_NO_BROWSER_OPEN=1 in vitest keeps
+// the upstream instant-503 contract instead of auto-opening a browser) ──────
+describe('Browser-dependent routes', () => {
+  it('POST /api/export/image with no clients returns 503', async () => {
+    const res = await request(app)
+      .post('/api/export/image')
+      .send({ format: 'png' });
+    expect(res.status).toBe(503);
+    expect(res.body.error).toContain('No frontend client connected');
+  });
+
+  it('POST /api/viewport with no clients returns 503', async () => {
+    const res = await request(app)
+      .post('/api/viewport')
+      .send({ scrollToContent: true });
+    expect(res.status).toBe(503);
+    expect(res.body.error).toContain('No frontend client connected');
+  });
+});
+
 // ─── Edge cases ───────────────────────────────────────────────
 describe('Edge cases', () => {
   it('invalid element type returns 400', async () => {

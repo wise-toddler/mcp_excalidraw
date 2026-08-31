@@ -38,6 +38,7 @@ import {
   runWithCanvas
 } from './canvases.js';
 import { normalizeLabel } from './core/normalize.js';
+import { ensureBrowserClient, canvasOpenUrl } from './browser-open.js';
 import { forkRoutes } from './canvas-routes.js';
 import { isMainModule } from './core/entry.js';
 import { writePidFile, removePidFile } from './core/pidfile.js';
@@ -933,7 +934,7 @@ interface PendingExport {
 }
 const pendingExports = new Map<string, PendingExport>();
 
-app.post('/api/export/image', (req: Request, res: Response) => {
+app.post('/api/export/image', async (req: Request, res: Response) => {
   try {
     const { format, background } = req.body;
 
@@ -944,7 +945,7 @@ app.post('/api/export/image', (req: Request, res: Response) => {
       });
     }
 
-    if (clients.size === 0) {
+    if (!(await ensureBrowserClient({ canvasId: currentCanvasId(), wss, clients, url: canvasOpenUrl(HOST, PORT, currentCanvasId()) }))) {
       return res.status(503).json({
         success: false,
         error: 'No frontend client connected. Open the canvas in a browser first.'
@@ -1103,7 +1104,7 @@ const viewportRequestSchema = z.object({
   }
 });
 
-app.post('/api/viewport', (req: Request, res: Response) => {
+app.post('/api/viewport', async (req: Request, res: Response) => {
   try {
     const {
       scrollToContent,
@@ -1115,7 +1116,7 @@ app.post('/api/viewport', (req: Request, res: Response) => {
       offsetY
     } = viewportRequestSchema.parse(req.body);
 
-    if (clients.size === 0) {
+    if (!(await ensureBrowserClient({ canvasId: currentCanvasId(), wss, clients, url: canvasOpenUrl(HOST, PORT, currentCanvasId()) }))) {
       return res.status(503).json({
         success: false,
         error: 'No frontend client connected. Open the canvas in a browser first.'
@@ -1341,8 +1342,8 @@ app.use(forkRoutes({
   wss,
   rerouteBoundArrows,
   UpdateElementSchema,
-  pageUrl: id => `http://${formatHostForUrl(HOST)}:${PORT}/?canvasId=${encodeURIComponent(id)}`,
-  ensureClient: async id => clientsForCanvas(id, clients).length > 0
+  pageUrl: id => canvasOpenUrl(HOST, PORT, id),
+  ensureClient: id => ensureBrowserClient({ canvasId: id, wss, clients, url: canvasOpenUrl(HOST, PORT, id) })
 }));
 
 // Error handling middleware
