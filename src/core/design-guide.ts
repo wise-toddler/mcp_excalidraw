@@ -73,6 +73,46 @@ export const DIAGRAM_DESIGN_GUIDE = `# Excalidraw Diagram Design Guide
 - Arrows: use start/end arrowheads to show cardinality
 - Colors: light-blue fill for entities, no fill for junction tables
 
+### Ready-to-Use Layout Blueprints
+
+#### 3-Tier Architecture (Frontend → Backend → Database)
+\`\`\`json
+{"elements": [
+  {"id": "frontend", "type": "rectangle", "x": 200, "y": 50,  "width": 400, "height": 80, "text": "Frontend", "backgroundColor": "#a5d8ff", "strokeColor": "#1971c2", "fillStyle": "solid"},
+  {"id": "backend", "type": "rectangle", "x": 200, "y": 230, "width": 400, "height": 80, "text": "Backend API", "backgroundColor": "#b2f2bb", "strokeColor": "#2f9e44", "fillStyle": "solid"},
+  {"id": "database", "type": "rectangle", "x": 200, "y": 410, "width": 400, "height": 80, "text": "Database", "backgroundColor": "#ffd8a8", "strokeColor": "#e8590c", "fillStyle": "solid"},
+  {"type": "arrow", "x": 0, "y": 0, "startElementId": "frontend", "endElementId": "backend"},
+  {"type": "arrow", "x": 0, "y": 0, "startElementId": "backend", "endElementId": "database"}
+]}
+\`\`\`
+Spacing: 100px vertical gap between tiers. All boxes same width for alignment.
+
+#### Hub-and-Spoke (API Gateway + 4 Services)
+\`\`\`json
+{"elements": [
+  {"id": "gateway", "type": "rectangle", "x": 300, "y": 200, "width": 200, "height": 100, "text": "API Gateway", "backgroundColor": "#a5d8ff", "strokeColor": "#1971c2", "fillStyle": "solid"},
+  {"id": "auth", "type": "rectangle", "x": 50,  "y": 50,  "width": 160, "height": 80, "text": "Auth Service", "backgroundColor": "#b2f2bb", "strokeColor": "#2f9e44", "fillStyle": "solid"},
+  {"id": "user", "type": "rectangle", "x": 590, "y": 50,  "width": 160, "height": 80, "text": "User Service", "backgroundColor": "#b2f2bb", "strokeColor": "#2f9e44", "fillStyle": "solid"},
+  {"id": "order", "type": "rectangle", "x": 50,  "y": 370, "width": 160, "height": 80, "text": "Order Service", "backgroundColor": "#eebefa", "strokeColor": "#9c36b5", "fillStyle": "solid"},
+  {"id": "payment", "type": "rectangle", "x": 590, "y": 370, "width": 160, "height": 80, "text": "Payment Service", "backgroundColor": "#eebefa", "strokeColor": "#9c36b5", "fillStyle": "solid"}
+]}
+\`\`\`
+Hub centered at (300,200). Spokes at corners with 100+px clearance.
+
+#### Pipeline / Flow (4 stages left-to-right)
+\`\`\`json
+{"elements": [
+  {"id": "ingest", "type": "rectangle", "x": 50,  "y": 100, "width": 160, "height": 80, "text": "Ingest", "backgroundColor": "#a5d8ff", "fillStyle": "solid"},
+  {"id": "transform", "type": "rectangle", "x": 270, "y": 100, "width": 160, "height": 80, "text": "Transform", "backgroundColor": "#b2f2bb", "fillStyle": "solid"},
+  {"id": "validate", "type": "rectangle", "x": 490, "y": 100, "width": 160, "height": 80, "text": "Validate", "backgroundColor": "#ffd8a8", "fillStyle": "solid"},
+  {"id": "store", "type": "rectangle", "x": 710, "y": 100, "width": 160, "height": 80, "text": "Store", "backgroundColor": "#eebefa", "fillStyle": "solid"},
+  {"type": "arrow", "x": 0, "y": 0, "startElementId": "ingest", "endElementId": "transform"},
+  {"type": "arrow", "x": 0, "y": 0, "startElementId": "transform", "endElementId": "validate"},
+  {"type": "arrow", "x": 0, "y": 0, "startElementId": "validate", "endElementId": "store"}
+]}
+\`\`\`
+Spacing: 60px horizontal gap between stages. All boxes same height on same y.
+
 ## Anti-Patterns to Avoid
 
 1. **Overlapping elements** — always leave gaps; use distribute_elements

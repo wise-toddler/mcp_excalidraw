@@ -3,8 +3,10 @@
 ## Defaults
 
 - Canvas base URL: `EXPRESS_SERVER_URL` (default `http://127.0.0.1:3000`); CLI also accepts `--url <canvasUrl>`
+- Canvas id: `CANVAS_ID` env (default `default`); CLI also accepts `--canvas <id>`. `launch.sh` prints both the URL and the id
 - Canvas health: `GET /health` or `npx -y mcp-excalidraw-server status`
 - Auto-start: any canvas-touching CLI command starts the server if it's down (opt out with `EXCALIDRAW_NO_AUTOSTART=1`)
+- Headless auto-open: browser-dependent operations open `/?canvasId=<id>` when no tab is connected (opt out with `EXCALIDRAW_NO_BROWSER_OPEN=1`)
 
 ## CLI Reference
 
@@ -60,7 +62,7 @@ JSON results on stdout — except `describe` (plain text) and raw-content output
 | `install-skill --dir <skills-root>` | Install this skill into an agent-chosen project/global skills root (replaces any existing copy) |
 | `help [command]`, `--version` | Usage and version |
 
-## MCP Tools (26 total)
+## MCP Tools (30 total)
 
 ### Element CRUD
 
@@ -72,6 +74,7 @@ JSON results on stdout — except `describe` (plain text) and raw-content output
 | `delete_element` | Delete element | `id` |
 | `query_elements` | Query by type/filters | (optional) `type`, `filter`, `bbox` |
 | `batch_create_elements` | Create many at once | `elements[]` |
+| `batch_update_elements` | Update many at once (one call instead of N `update_element`s) | `elements[]` (each entry needs `id` + the fields to change) |
 | `duplicate_elements` | Clone with offset | `elementIds[]`, (optional) `offsetX`, `offsetY` |
 
 ### Layout & Organization
@@ -110,6 +113,14 @@ JSON results on stdout — except `describe` (plain text) and raw-content output
 | `snapshot_scene` | Save named snapshot | `name` |
 | `restore_snapshot` | Restore from snapshot | `name` |
 
+### Session & History
+
+| Tool | Description | Required params |
+|------|-------------|-----------------|
+| `get_canvas_url` | Browser URL for this session's canvas (`/?canvasId=<id>`) | (none) |
+| `undo` | Undo the last action (needs browser) | (none) |
+| `redo` | Redo the last undone action (needs browser) | (none) |
+
 ### Viewport & Camera
 
 | Tool | Description | Required params |
@@ -132,12 +143,24 @@ Notes:
 - **CLI + MCP**: Set `text` on shapes to label them (auto-converts to `label.text`). Use `startElementId`/`endElementId` on arrows.
 - **CLI `apply.update`**: Update entries can use either direct fields (`{"id":"a","x":120}`) or a `set` object (`{"id":"a","set":{"x":120}}`). Do not mix both forms in one update entry.
 - **Raw REST**: Use `"label": {"text": "..."}` for shape labels. Use `"start": {"id": "..."}` / `"end": {"id": "..."}` for arrow binding. (Different format!)
-- `fontFamily` must be a string (e.g. `"1"`, `"helvetica"`) or omitted — do NOT pass a number.
+- **`labelPosition`** (on `create_element` / `batch_create_elements`): `"center"` (default) binds a centered label; any other value (`"top-left"`, `"top-center"`, ...) places a free-standing text element inside the shape at that corner/edge — the safe way to title a background zone.
+- `fontFamily` accepts a string name (`"helvetica"`, `"cascadia"`, `"excalifont"`, ...), a string number (`"1"`–`"8"`), or a number.
 - `points` accepts both `[[x,y]]` tuples and `[{x,y}]` objects.
 - **Curved arrows**: Use `"roundness": {"type": 2}` with 3+ points for smooth curves. Use `"elbowed": true` for right-angle routing.
 - Prefer creating shapes first, then arrows, then alignment/grouping.
 
 ## Canvas REST API (HTTP)
+
+Every element/scene endpoint below is per-canvas: pick the canvas with `?canvasId=<id>` on the query string or an `x-canvas-id: <id>` request header (query wins; omitting both targets the `default` canvas).
+
+### Canvases
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/canvases` | List canvases (id, element/file/snapshot counts, timestamps) |
+| `POST` | `/api/canvases` | Create canvas `{id}` (id optional — generated when omitted); 409 if it exists |
+| `DELETE` | `/api/canvases/:id` | Delete a canvas and disconnect its tabs (the `default` canvas cannot be deleted) |
+| `GET` | `/canvases` | HTML dashboard listing every canvas |
 
 ### Elements
 
@@ -151,8 +174,17 @@ Notes:
 | `DELETE` | `/api/elements/clear` | Clear all elements |
 | `GET` | `/api/elements/search?type=...` | Search with filters (exact string match + bbox) |
 | `POST` | `/api/elements/batch` | Batch create |
+| `POST` | `/api/elements/batch-update` | Batch update `{elements: [{id, ...fields}]}` |
 | `POST` | `/api/elements/sync` | Overwrite import (clear + write) |
-| `POST` | `/api/elements/from-mermaid` | Mermaid conversion via frontend |
+| `POST` | `/api/elements/from-mermaid` | Mermaid conversion via frontend (body key: `mermaidDiagram`) |
+
+### History
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/undo` | Undo the last action (needs frontend) |
+| `POST` | `/api/redo` | Redo the last undone action (needs frontend) |
+| `POST` | `/api/history/result` | Frontend posts the undo/redo result back |
 
 ### Export
 
