@@ -10,6 +10,8 @@ import {
 import type { ExcalidrawElement, NonDeleted, NonDeletedExcalidrawElement } from '@excalidraw/excalidraw/types/element/types'
 import { convertMermaidToExcalidraw, DEFAULT_MERMAID_CONFIG } from './utils/mermaidConverter'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
+// Importing installs the same-origin /api/ fetch shim for non-default canvases
+import { withCanvasId } from './canvas-id'
 
 // Type definitions
 type ExcalidrawAPIRefValue = ExcalidrawImperativeAPI;
@@ -31,6 +33,8 @@ interface ServerElement {
   fontFamily?: string | number;
   label?: {
     text: string;
+    fontSize?: number;
+    fontFamily?: string | number;
   };
   createdAt?: string;
   updatedAt?: string;
@@ -413,7 +417,7 @@ function App(): JSX.Element {
     }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${protocol}//${window.location.host}`
+    const wsUrl = withCanvasId(`${protocol}//${window.location.host}`)
 
     websocketRef.current = new WebSocket(wsUrl)
 
@@ -764,6 +768,32 @@ function App(): JSX.Element {
               console.error('Error converting Mermaid diagram from WebSocket:', error)
             }
           }
+          break
+
+        case 'undo_request':
+          // Dispatch Ctrl/Cmd+Z keyboard event to trigger Excalidraw's built-in undo action.
+          // Excalidraw ignores keydown dispatched on `document` and expects metaKey on macOS
+          // (ctrlKey elsewhere), so target its container and set both modifiers.
+          (document.querySelector('.excalidraw') ?? document).dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'z', code: 'KeyZ', ctrlKey: true, metaKey: true, bubbles: true })
+          )
+          void fetch('/api/history/result', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ requestId: data.requestId, success: true, message: 'Undo completed' })
+          })
+          break
+
+        case 'redo_request':
+          // Dispatch Ctrl/Cmd+Shift+Z keyboard event to trigger Excalidraw's built-in redo action
+          (document.querySelector('.excalidraw') ?? document).dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'z', code: 'KeyZ', ctrlKey: true, metaKey: true, shiftKey: true, bubbles: true })
+          )
+          void fetch('/api/history/result', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ requestId: data.requestId, success: true, message: 'Redo completed' })
+          })
           break
 
         default:
