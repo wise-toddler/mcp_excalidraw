@@ -23,3 +23,7 @@ public/dist/
 .DS_Store
 
 docs/
+
+# Local server discovery files
+.excalidraw-server-port
+.excalidraw-server-pid
