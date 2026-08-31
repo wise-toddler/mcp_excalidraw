@@ -21,6 +21,7 @@ import {
   bumpSceneVersion
 } from './canvases.js';
 import { normalizeLabel } from './core/normalize.js';
+import { warningsForElements } from './core/layout-checks.js';
 import { renderCanvasDashboard, CanvasSummary } from './core/canvas-dashboard.js';
 import type { UpdateElementSchema } from './server.js';
 
@@ -149,11 +150,19 @@ export function forkRoutes(deps: ForkRouteDeps): Router {
         deps.broadcast({ type: 'element_updated', element: el } as ElementUpdatedMessage);
       }
 
+      // Layout feedback on the post-mutation scene, limited to this request's
+      // elements. Warnings only — never affects success or status code.
+      const layoutWarnings = warningsForElements(
+        Array.from(elements.values()),
+        updatedElements.map(el => el.id)
+      );
+
       res.json({
         success: true,
         elements: updatedElements,
         count: updatedElements.length,
-        errors: errors.length > 0 ? errors : undefined
+        errors: errors.length > 0 ? errors : undefined,
+        ...(layoutWarnings.length > 0 ? { layoutWarnings } : {})
       });
     } catch (error) {
       logger.error('Error batch updating elements:', error);

@@ -40,6 +40,7 @@ import {
   bumpSceneVersion
 } from './canvases.js';
 import { normalizeLabel, rehydrateArrowRefs } from './core/normalize.js';
+import { warningsForElements } from './core/layout-checks.js';
 import { ensureBrowserClient, canvasOpenUrl } from './browser-open.js';
 import { forkRoutes } from './canvas-routes.js';
 import { isMainModule } from './core/entry.js';
@@ -762,10 +763,18 @@ app.post('/api/elements/batch', (req: Request, res: Response) => {
     };
     broadcast(message);
 
+    // Layout feedback on the post-mutation scene, limited to this request's
+    // elements. Warnings only — never affects success or status code.
+    const layoutWarnings = warningsForElements(
+      Array.from(elements.values()),
+      createdElements.map(el => el.id)
+    );
+
     res.json({
       success: true,
       elements: createdElements,
-      count: createdElements.length
+      count: createdElements.length,
+      ...(layoutWarnings.length > 0 ? { layoutWarnings } : {})
     });
   } catch (error) {
     logger.error('Error batch creating elements:', error);

@@ -214,6 +214,8 @@ After each `batch_create_elements` / `add` / `POST /api/elements/batch`, take a 
 8. **Zone label placement** — If you used `text`/`label.text` on a background zone rectangle, the zone label will be centered in the middle of the zone, overlapping everything inside. Fix: delete the bound text element and add a free-standing text element (or re-create with `labelPosition: "top-left"`) at the top of the zone instead (see Layout Anti-Patterns above).
 9. **Duplicate labels** — If element counts look inflated or you see mixed-color text-on-text, a stale browser tab's auto-sync may have stacked duplicate bound text on a container. Use `describe_scene` to check for >1 text element per container; delete duplicates.
 
+Automated help: `describe_scene` ends with a **Layout warnings** section, and `batch_create_elements` / `batch_update_elements` (and `POST /api/elements/batch` / `batch-update`) return a `layoutWarnings` array covering overlap, text overflow, and duplicate labels for the elements you just wrote — each with a numeric fix ("move X down by 42px"). They are warnings only and never fail the call; treat them as a first pass, not a replacement for the checklist above.
+
 If you find any issue: **stop, fix it, re-screenshot, then continue.** Say "I see [issue], fixing it" rather than glossing over problems. Only proceed once all checks pass.
 
 ---

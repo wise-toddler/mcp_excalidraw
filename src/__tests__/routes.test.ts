@@ -120,6 +120,57 @@ describe('Elements API', () => {
     expect(res.body.elements).toHaveLength(2);
   });
 
+  it('POST /api/elements/batch reports layoutWarnings for overlapping shapes', async () => {
+    const res = await request(app)
+      .post('/api/elements/batch')
+      .send({
+        elements: [
+          { id: 'ov1', type: 'rectangle', x: 0, y: 0, width: 100, height: 100 },
+          { id: 'ov2', type: 'rectangle', x: 0, y: 80, width: 100, height: 100 },
+        ],
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.layoutWarnings).toHaveLength(1);
+    expect(res.body.layoutWarnings[0].kind).toBe('overlap');
+    expect(res.body.layoutWarnings[0].elementIds).toEqual(['ov1', 'ov2']);
+    expect(res.body.layoutWarnings[0].suggestion).toBe('move ov2 down by 40px');
+  });
+
+  it('POST /api/elements/batch stays quiet for a zone containing a child', async () => {
+    const res = await request(app)
+      .post('/api/elements/batch')
+      .send({
+        elements: [
+          { id: 'zone', type: 'rectangle', x: 0, y: 0, width: 400, height: 300 },
+          { id: 'child', type: 'rectangle', x: 20, y: 20, width: 100, height: 60 },
+        ],
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.layoutWarnings).toBeUndefined();
+  });
+
+  it('POST /api/elements/batch-update reports layoutWarnings after a move', async () => {
+    await request(app)
+      .post('/api/elements/batch')
+      .send({
+        elements: [
+          { id: 'mv1', type: 'rectangle', x: 0, y: 0, width: 100, height: 100 },
+          { id: 'mv2', type: 'rectangle', x: 500, y: 0, width: 100, height: 100 },
+        ],
+      });
+
+    const res = await request(app)
+      .post('/api/elements/batch-update')
+      .send({ elements: [{ id: 'mv2', x: 70 }] });
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.count).toBe(1);
+    expect(res.body.layoutWarnings).toHaveLength(1);
+    expect(res.body.layoutWarnings[0].kind).toBe('overlap');
+    expect(res.body.layoutWarnings[0].suggestion).toBe('move mv2 right by 50px');
+  });
+
   it('POST /api/elements/batch-update updates and reports errors', async () => {
     const c1 = await request(app).post('/api/elements').send({ type: 'rectangle', x: 0, y: 0 });
     const id1 = c1.body.element.id;

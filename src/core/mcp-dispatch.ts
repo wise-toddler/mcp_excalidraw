@@ -40,6 +40,7 @@ import {
 import { buildSceneFile, importScene } from './scene-io.js';
 import { wrapSceneAsObsidianMd } from './obsidian-md.js';
 import { describeScene } from './describe.js';
+import { warningsForElements, LayoutWarning } from './layout-checks.js';
 import { exportToExcalidrawUrl } from './share-url.js';
 import { DIAGRAM_DESIGN_GUIDE } from './design-guide.js';
 import { sceneState, ensureCanvasReadyForMcpTool, toolNeedsCanvasBeforeDispatch } from './canvas-state.js';
@@ -115,6 +116,18 @@ const QuerySchema = z.object({
 const ResourceSchema = z.object({
   resource: z.enum(['scene', 'library', 'theme', 'elements'])
 });
+
+// Post-mutation layout feedback for the batch tools: re-read the scene as it
+// now stands and keep only warnings involving the elements just written.
+// Never throws — a layout check must not fail a mutation that succeeded.
+async function layoutWarningsForIds(ids: string[]): Promise<LayoutWarning[]> {
+  try {
+    return warningsForElements(await getElements(), ids);
+  } catch (error) {
+    logger.warn('Layout check skipped:', (error as Error).message);
+    return [];
+  }
+}
 
 /**
  * Dispatches one `tools/call` invocation. Era-agnostic on purpose: the same
@@ -432,11 +445,14 @@ export async function callExcalidrawTool(
           throw new Error('Failed to batch create elements: HTTP server unavailable');
         }
 
+        const layoutWarnings = await layoutWarningsForIds(canvasElements.map(el => el.id));
+
         const result = {
           success: true,
           elements: canvasElements,
           count: canvasElements.length,
-          syncedToCanvas: true
+          syncedToCanvas: true,
+          ...(layoutWarnings.length > 0 ? { layoutWarnings } : {})
         };
 
         logger.info('Batch elements created via MCP and synced to canvas', {
@@ -739,11 +755,16 @@ export async function callExcalidrawTool(
 
         const r = await batchUpdateElementsOnCanvas(updates);
 
+        const layoutWarnings = r.count > 0
+          ? await layoutWarningsForIds((r.elements || []).map(el => el.id))
+          : [];
+
         const result = {
           success: r.success,
           updatedCount: r.count,
           errors: r.errors,
-          elements: r.elements
+          elements: r.elements,
+          ...(layoutWarnings.length > 0 ? { layoutWarnings } : {})
         };
 
         return {

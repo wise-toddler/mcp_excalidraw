@@ -1,4 +1,8 @@
 import { ServerElement } from '../types.js';
+import { checkLayout } from './layout-checks.js';
+
+// Keep a huge, messy scene from flooding the agent's context
+const MAX_REPORTED_WARNINGS = 20;
 
 // Build an AI-readable description of the current canvas: element types,
 // positions, connections, labels, spatial layout, and bounding box.
@@ -93,6 +97,21 @@ export function describeScene(allElements: ServerElement[]): string {
     lines.push('### Groups:');
     for (const [gid, ids] of Object.entries(groupMap)) {
       lines.push(`  Group ${gid}: [${ids.join(', ')}]`);
+    }
+  }
+
+  // Layout feedback so an agent can spot collisions/overflow without a screenshot
+  const warnings = checkLayout(allElements);
+  lines.push('');
+  lines.push('### Layout warnings:');
+  if (warnings.length === 0) {
+    lines.push('  ✅ no layout warnings');
+  } else {
+    for (const w of warnings.slice(0, MAX_REPORTED_WARNINGS)) {
+      lines.push(`  ⚠ [${w.kind}] ${w.message}${w.suggestion ? ` → ${w.suggestion}` : ''}`);
+    }
+    if (warnings.length > MAX_REPORTED_WARNINGS) {
+      lines.push(`  +${warnings.length - MAX_REPORTED_WARNINGS} more`);
     }
   }
 
