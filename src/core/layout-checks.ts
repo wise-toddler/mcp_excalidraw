@@ -37,6 +37,49 @@ export function estimateTextSize(text: string, fontSize?: number): { width: numb
   };
 }
 
+// Shapes an agent creates with text but no width/height: size the box from the
+// text instead of leaving it at the client default — forgetting the manual
+// `max(200, chars*10+40)` formula is the #1 cause of truncated labels (#10).
+// Deliberately shares estimateTextSize with the overflow check above, so an
+// auto-sized box can never trigger its own text-overflow warning.
+const AUTO_SIZE_TYPES = new Set(['rectangle', 'ellipse', 'diamond']);
+const MIN_AUTO_WIDTH = 200;
+const MIN_AUTO_HEIGHT = 70;
+const AUTO_WIDTH_PADDING = 40;
+const AUTO_HEIGHT_PADDING = 20;
+// An ellipse's inscribed text area is smaller than its bounding box
+const ELLIPSE_WIDTH_FACTOR = 1.5;
+const ELLIPSE_HEIGHT_FACTOR = 1.3;
+
+// Fill in a missing width/height on a text-bearing shape. An explicitly
+// supplied dimension is never overridden, and elements without text (or of
+// any other type) are returned untouched. Create paths only — updates and
+// imports carry real dimensions.
+export function autoSizeElement<T extends { type?: string; width?: unknown; height?: unknown }>(el: T): T {
+  if (!el || !el.type || !AUTO_SIZE_TYPES.has(el.type)) return el;
+  const needsWidth = el.width == null;
+  const needsHeight = el.height == null;
+  if (!needsWidth && !needsHeight) return el;
+
+  const contained = containedText(el as unknown as ServerElement);
+  if (!contained?.text) return el;
+
+  const needed = estimateTextSize(contained.text, contained.fontSize);
+  const isEllipse = el.type === 'ellipse';
+  const patch: Record<string, number> = {};
+  if (needsWidth) {
+    patch.width = Math.ceil(
+      Math.max(MIN_AUTO_WIDTH, needed.width + AUTO_WIDTH_PADDING) * (isEllipse ? ELLIPSE_WIDTH_FACTOR : 1)
+    );
+  }
+  if (needsHeight) {
+    patch.height = Math.ceil(
+      Math.max(MIN_AUTO_HEIGHT, needed.height + AUTO_HEIGHT_PADDING) * (isEllipse ? ELLIPSE_HEIGHT_FACTOR : 1)
+    );
+  }
+  return { ...el, ...patch };
+}
+
 // Axis-aligned bounding box. Shapes use their own box; arrows/lines/freedraw
 // derive one from their points (bounds only — they are never overlap-checked);
 // text falls back to the estimate when the canvas has not measured it yet.

@@ -40,7 +40,7 @@ import {
   bumpSceneVersion
 } from './canvases.js';
 import { normalizeLabel, rehydrateArrowRefs } from './core/normalize.js';
-import { warningsForElements } from './core/layout-checks.js';
+import { warningsForElements, autoSizeElement } from './core/layout-checks.js';
 import { ensureBrowserClient, canvasOpenUrl } from './browser-open.js';
 import { forkRoutes } from './canvas-routes.js';
 import { isMainModule } from './core/entry.js';
@@ -300,7 +300,8 @@ app.get('/api/elements', (req: Request, res: Response) => {
 // Create new element
 app.post('/api/elements', (req: Request, res: Response) => {
   try {
-    const params = CreateElementSchema.parse(req.body);
+    // Size text-bearing shapes created without width/height (#10)
+    const params = autoSizeElement(CreateElementSchema.parse(req.body));
     if (params.label) params.label = normalizeLabel(params.label);
     logger.info('Creating element via API', { type: params.type });
 
@@ -733,7 +734,8 @@ app.post('/api/elements/batch', (req: Request, res: Response) => {
     const createdElements: ServerElement[] = [];
 
     elementsToCreate.forEach(elementData => {
-      const params = CreateElementSchema.parse(elementData);
+      // Size text-bearing shapes created without width/height (#10)
+      const params = autoSizeElement(CreateElementSchema.parse(elementData));
       if (params.label) params.label = normalizeLabel(params.label);
       // Prioritize passed ID (for MCP sync), otherwise generate new ID
       const id = params.id || generateId();

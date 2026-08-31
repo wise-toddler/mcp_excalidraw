@@ -117,6 +117,7 @@ The canvas uses a 2D coordinate grid: **(0, 0) is the origin**, **x increases ri
 - Ellipses need 50% more: `width * 1.5`, `height * 1.3` (text area is smaller than bounds)
 - Text elements: `width = charCount * 9`, `height = lineCount * 24`
 - Never use width < 200 or height < 70 for shapes with text
+- Shortcut: on create, omit `width`/`height` on a rectangle/ellipse/diamond that carries `text`/`label` and the server applies these exact formulas for you (explicit values are never overridden; updates and imports are untouched)
 
 **Spacing rules (MUST follow — overlap is the #2 problem):**
 > **Don't pick a number from a range — agents who do consistently pick the minimum, which is too tight in practice. The number IS the minimum. Use it.** Real-world feedback: builders given "80–150px" picked 30–60 and had to redo it 3+ times.

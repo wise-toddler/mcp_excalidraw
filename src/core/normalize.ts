@@ -2,6 +2,7 @@ import path from 'path';
 import { generateId, ServerElement, normalizeFontFamily } from '../types.js';
 import { ALLOWED_EXPORT_DIRS } from './config.js';
 import { expandLabelPosition } from './label-position.js';
+import { autoSizeElement } from './layout-checks.js';
 
 // Safe file path validation to prevent path traversal attacks
 export function sanitizeFilePath(filePath: string): string {
@@ -93,7 +94,10 @@ export interface ElementInput {
 // fontFamily normalization, default points for bound arrows, timestamps,
 // and text→label conversion. Used by create/batch-create in both the MCP
 // server and the CLI so the two front-ends produce identical elements.
-export function prepareElement(elementData: ElementInput): ServerElement {
+export function prepareElement(rawElementData: ElementInput): ServerElement {
+  // Size text-bearing shapes that came without width/height (#10). A no-op
+  // when prepareElements already sized them ahead of labelPosition expansion.
+  const elementData = autoSizeElement(rawElementData);
   const { startElementId, endElementId, id: customId, ...elementProps } = elementData;
   const id = customId || generateId();
   const element: ServerElement = {
@@ -123,9 +127,11 @@ export function prepareElement(elementData: ElementInput): ServerElement {
 }
 
 // Prepare a batch of raw inputs: labelPosition expansion must run BEFORE
-// prepareElement so convertTextToLabel doesn't consume `text` first.
+// prepareElement so convertTextToLabel doesn't consume `text` first, and
+// auto-sizing runs before that again so the free-standing label is placed
+// against the sized shape rather than the 160x80 fallback.
 export function prepareElements(inputs: ElementInput[]): ServerElement[] {
-  return inputs.flatMap(expandLabelPosition).map(prepareElement);
+  return inputs.map(autoSizeElement).flatMap(expandLabelPosition).map(prepareElement);
 }
 
 // Shared update-payload preparation (points, fontFamily, text→label,

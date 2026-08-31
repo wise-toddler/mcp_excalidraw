@@ -77,6 +77,8 @@ JSON results on stdout — except `describe` (plain text) and raw-content output
 | `batch_update_elements` | Update many at once (one call instead of N `update_element`s) | `elements[]` (each entry needs `id` + the fields to change) |
 | `duplicate_elements` | Clone with offset | `elementIds[]`, (optional) `offsetX`, `offsetY` |
 
+On create (`create_element`, `batch_create_elements`, `POST /api/elements`, `POST /api/elements/batch`), a rectangle/ellipse/diamond that carries `text`/`label` but no `width`/`height` is auto-sized from that text using the sizing formulas — pass explicit dimensions whenever you want a specific size, they are never overridden. Updates, imports, and syncs are untouched.
+
 Both batch tools (and `POST /api/elements/batch` / `/api/elements/batch-update`) add a `layoutWarnings` array to their response when the elements you just wrote overlap, overflow their text, or carry duplicate bound labels — each entry has `kind`, `elementIds`, `message`, and a numeric `suggestion`. Omitted when clean; never affects success. `describe_scene` reports the same checks for the whole scene.
 
 ### Layout & Organization
