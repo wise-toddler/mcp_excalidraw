@@ -54,6 +54,7 @@ function printHelp(): void {
     '  Exit codes: 0 ok, 1 error, 2 usage, 3 canvas unreachable, 4 browser tab required.',
     '  Canvas-driving commands auto-start the server (disable with EXCALIDRAW_NO_AUTOSTART=1).',
     '  Canvas URL comes from EXPRESS_SERVER_URL (default http://127.0.0.1:3000) or --url.',
+    '  Canvas id: CANVAS_ID env or --canvas <id> (default "default"); launch.sh prints both.',
     '',
     'Run `mcp-excalidraw-server help <command>` for per-command usage.'
   ];

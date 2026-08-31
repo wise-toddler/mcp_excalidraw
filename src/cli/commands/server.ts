@@ -2,7 +2,7 @@ import { parseArgs } from '../args.js';
 import { printJson, note } from '../util.js';
 import { ensureCanvasRunning, stopCanvas, canvasPort, isCanvasHealth, foreignServiceError } from '../../core/spawn.js';
 import { getHealth, getSyncStatus } from '../../core/canvas-client.js';
-import { EXPRESS_SERVER_URL } from '../../core/config.js';
+import { EXPRESS_SERVER_URL, CANVAS_ID, canvasPageUrl } from '../../core/config.js';
 import { readPidFile } from '../../core/pidfile.js';
 
 export async function start(argv: string[]): Promise<void> {
@@ -57,13 +57,17 @@ export async function status(argv: string[]): Promise<void> {
     sync = await getSyncStatus();
   } catch { /* health is enough */ }
 
+  note(`Canvas page: ${canvasPageUrl()}`);
   printJson({
     running: true,
     url: EXPRESS_SERVER_URL,
+    canvas: CANVAS_ID,
+    canvasUrl: canvasPageUrl(),
     // Prefer the pid the server reports about itself; the pidfile can be stale
     pid: health.pid ?? readPidFile(canvasPort()) ?? undefined,
     elements: health.elements_count,
     browserClients: health.websocket_clients,
+    canvasClients: health.canvas_clients ?? health.websocket_clients,
     ...sync
   });
 }

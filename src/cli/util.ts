@@ -1,7 +1,6 @@
 import fs from 'fs';
 import { CliUsageError, readStdin } from './args.js';
 import { getHealth } from '../core/canvas-client.js';
-import { EXPRESS_SERVER_URL } from '../core/config.js';
 
 // Results go to stdout as JSON; diagnostics belong on stderr.
 export function printJson(value: unknown): void {
@@ -13,14 +12,13 @@ export function note(message: string): void {
 }
 
 // Screenshot / mermaid / viewport need a browser tab rendering the canvas.
+// This pre-check is just a heads-up note now: the server auto-opens a tab on
+// demand, and a genuine failure arrives as its 503 (BROWSER_REQUIRED) through
+// requestJson.
 export async function requireBrowserClient(what: string): Promise<void> {
   const health = await getHealth();
-  if (health.websocket_clients === 0) {
-    const error = new Error(
-      `${what} requires the canvas to be open in a browser. Open ${EXPRESS_SERVER_URL} and retry.`
-    );
-    (error as any).code = 'BROWSER_REQUIRED';
-    throw error;
+  if ((health.canvas_clients ?? health.websocket_clients) === 0) {
+    note('No browser tab on this canvas yet; the server will try to open one.');
   }
 }
 

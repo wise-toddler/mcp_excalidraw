@@ -1,6 +1,10 @@
 import logger from '../utils/logger.js';
 import { ServerElement } from '../types.js';
-import { EXPRESS_SERVER_URL, ENABLE_CANVAS_SYNC } from './config.js';
+import { EXPRESS_SERVER_URL, ENABLE_CANVAS_SYNC, withCanvasId } from './config.js';
+
+// Every /api URL goes through here so CANVAS_ID scoping applies at one choke
+// point (the /health identity probe deliberately stays on the bare URL).
+const apiUrl = (path: string) => withCanvasId(`${EXPRESS_SERVER_URL}${path}`);
 
 // API Response types
 export interface ApiResponse {
@@ -30,7 +34,7 @@ export async function syncToCanvas(operation: string, data: any): Promise<SyncRe
 
     switch (operation) {
       case 'create':
-        url = `${EXPRESS_SERVER_URL}/api/elements`;
+        url = apiUrl('/api/elements');
         options = {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -39,7 +43,7 @@ export async function syncToCanvas(operation: string, data: any): Promise<SyncRe
         break;
 
       case 'update':
-        url = `${EXPRESS_SERVER_URL}/api/elements/${data.id}`;
+        url = apiUrl(`/api/elements/${data.id}`);
         options = {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -48,12 +52,12 @@ export async function syncToCanvas(operation: string, data: any): Promise<SyncRe
         break;
 
       case 'delete':
-        url = `${EXPRESS_SERVER_URL}/api/elements/${data.id}`;
+        url = apiUrl(`/api/elements/${data.id}`);
         options = { method: 'DELETE' };
         break;
 
       case 'batch_create':
-        url = `${EXPRESS_SERVER_URL}/api/elements/batch`;
+        url = apiUrl('/api/elements/batch');
         options = {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -128,7 +132,7 @@ export async function getElementFromCanvas(elementId: string): Promise<ServerEle
 
   try {
     await assertCanvasIdentity();
-    const response = await fetch(`${EXPRESS_SERVER_URL}/api/elements/${elementId}`);
+    const response = await fetch(apiUrl(`/api/elements/${elementId}`));
     if (!response.ok) {
       logger.warn(`Failed to fetch element ${elementId}: ${response.status}`);
       return null;
@@ -145,10 +149,14 @@ export async function getElementFromCanvas(elementId: string): Promise<ServerEle
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   await assertCanvasIdentity();
-  const response = await fetch(`${EXPRESS_SERVER_URL}${path}`, init);
+  const response = await fetch(apiUrl(path), init);
   const data = await response.json().catch(() => null) as any;
   if (!response.ok) {
-    throw new Error(data?.error || `HTTP server error: ${response.status} ${response.statusText}`);
+    const error = new Error(data?.error || `HTTP server error: ${response.status} ${response.statusText}`);
+    // 503 = server says a browser tab is required (it tried to open one);
+    // keep the CLI's exit-code contract (4) intact.
+    if (response.status === 503) (error as any).code = 'BROWSER_REQUIRED';
+    throw error;
   }
   return data as T;
 }
@@ -266,6 +274,23 @@ export async function batchCreateElementsStrict(elements: ServerElement[]): Prom
   return data.elements || [];
 }
 
+// Batch-update wrapper: unlike a raw fetch, requestJson throws on non-2xx so
+// a failure surfaces as an MCP/CLI error instead of a "successful" text blob,
+// and it passes the identity gate.
+export async function batchUpdateElementsOnCanvas(
+  updates: Array<Partial<ServerElement> & { id: string }>
+): Promise<{ success: boolean; elements: ServerElement[]; count: number; errors?: string[] }> {
+  return requestJson('/api/elements/batch-update', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ elements: updates })
+  });
+}
+
+export const undoOnCanvas = () => requestJson<{ success: boolean; message?: string }>('/api/undo', { method: 'POST' });
+
+export const redoOnCanvas = () => requestJson<{ success: boolean; message?: string }>('/api/redo', { method: 'POST' });
+
 // Identity marker the canvas server puts in /health (v1.1+)
 export const CANVAS_SERVICE_NAME = 'mcp-excalidraw-canvas';
 
@@ -351,10 +376,17 @@ export interface HealthStatus {
   // Identity fields (v1.1+); `stop` requires both before signaling anything
   service?: string;
   pid?: number;
+  // Multi-canvas fields (v2+)
+  canvas_id?: string;
+  canvas_count?: number;
+  canvas_clients?: number;
 }
 
-export async function getHealth(timeoutMs = 2000): Promise<HealthStatus> {
-  const response = await fetch(`${EXPRESS_SERVER_URL}/health`, { signal: AbortSignal.timeout(timeoutMs) });
+// scoped=true adds ?canvasId= so callers see per-canvas elements/clients;
+// pass scoped=false for identity/liveness probes of the whole server.
+export async function getHealth(timeoutMs = 2000, scoped = true): Promise<HealthStatus> {
+  const url = scoped ? withCanvasId(`${EXPRESS_SERVER_URL}/health`) : `${EXPRESS_SERVER_URL}/health`;
+  const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
   if (!response.ok) {
     throw new Error(`Health check failed: ${response.status}`);
   }

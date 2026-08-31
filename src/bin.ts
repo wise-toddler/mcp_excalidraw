@@ -33,6 +33,22 @@ for (let i = 0; i < argv.length; i++) {
   }
 }
 
+// Global --canvas flag: same rule — CANVAS_ID must be in the environment
+// before core modules (which read it at import time) are loaded.
+for (let i = 0; i < argv.length; i++) {
+  const token = argv[i]!;
+  if (token === '--canvas' && argv[i + 1]) {
+    process.env.CANVAS_ID = argv[i + 1];
+    argv.splice(i, 2);
+    break;
+  }
+  if (token.startsWith('--canvas=')) {
+    process.env.CANVAS_ID = token.slice('--canvas='.length);
+    argv.splice(i, 1);
+    break;
+  }
+}
+
 if (argv.length === 0) {
   // MCP mode: stdout belongs to the JSON-RPC transport from here on
   const { runServer } = await import('./index.js');
