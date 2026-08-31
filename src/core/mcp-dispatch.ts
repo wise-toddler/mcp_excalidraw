@@ -7,13 +7,16 @@ import {
   ServerElement,
   ExcalidrawElementType
 } from '../types.js';
-import { EXPRESS_SERVER_URL } from './config.js';
+import { EXPRESS_SERVER_URL, canvasPageUrl } from './config.js';
 import {
   updateElementOnCanvas,
   deleteElementOnCanvas,
   getElementFromCanvas,
   createElementOnCanvas,
   batchCreateElementsOnCanvas,
+  batchUpdateElementsOnCanvas,
+  undoOnCanvas,
+  redoOnCanvas,
   getElements,
   searchElements,
   clearCanvas,
@@ -24,7 +27,8 @@ import {
   sendMermaid,
   ApiResponse
 } from './canvas-client.js';
-import { sanitizeFilePath, prepareElement, prepareElementUpdate } from './normalize.js';
+import { sanitizeFilePath, prepareElements, prepareElementUpdate } from './normalize.js';
+import { LABEL_POSITIONS } from './label-position.js';
 import {
   alignElements,
   distributeElements,
@@ -62,6 +66,7 @@ export const ElementSchema = z.object({
   text: z.string().optional(),
   fontSize: z.number().optional(),
   fontFamily: z.union([z.string(), z.number()]).optional(),
+  labelPosition: z.enum(LABEL_POSITIONS).optional(),
   groupIds: z.array(z.string()).optional(),
   locked: z.boolean().optional(),
   strokeStyle: z.string().optional(),
@@ -133,25 +138,31 @@ export async function callExcalidrawTool(
         const params = ElementSchema.parse(args);
         logger.info('Creating element via MCP', { type: params.type });
 
-        const excalidrawElement = prepareElement(params);
+        // A non-center labelPosition expands into shape + free-standing text
+        const prepared = prepareElements([params]);
+        const shapeElement = prepared[0]!;
 
-        // Create element directly on HTTP server (no local storage)
-        const canvasElement = await createElementOnCanvas(excalidrawElement);
+        // Create element(s) directly on HTTP server (no local storage)
+        const created = prepared.length > 1
+          ? await batchCreateElementsOnCanvas(prepared)
+          : await createElementOnCanvas(shapeElement);
 
-        if (!canvasElement) {
+        if (!created) {
           throw new Error('Failed to create element: HTTP server unavailable');
         }
 
         logger.info('Element created via MCP and synced to canvas', {
-          id: excalidrawElement.id,
-          type: excalidrawElement.type,
-          synced: !!canvasElement
+          id: shapeElement.id,
+          type: shapeElement.type,
+          synced: !!created
         });
 
         return {
           content: [{
             type: 'text',
-            text: `Element created successfully!\n\n${JSON.stringify(canvasElement, null, 2)}\n\n✅ Synced to canvas`
+            text: prepared.length > 1
+              ? `Element created with free-standing label!\n\n${JSON.stringify(created, null, 2)}\n\n✅ Synced to canvas`
+              : `Element created successfully!\n\n${JSON.stringify(created, null, 2)}\n\n✅ Synced to canvas`
           }]
         };
       }
@@ -413,7 +424,7 @@ export async function callExcalidrawTool(
         const params = z.object({ elements: z.array(ElementSchema) }).parse(args);
         logger.info('Batch creating elements via MCP', { count: params.elements.length });
 
-        const createdElements: ServerElement[] = params.elements.map(elementData => prepareElement(elementData));
+        const createdElements: ServerElement[] = prepareElements(params.elements);
 
         const canvasElements = await batchCreateElementsOnCanvas(createdElements);
 
@@ -709,6 +720,55 @@ export async function callExcalidrawTool(
             type: 'text',
             text: `Viewport updated successfully.\n\n${JSON.stringify(viewportResult, null, 2)}`
           }]
+        };
+      }
+      case 'batch_update_elements': {
+        const params = z.object({
+          elements: z.array(ElementSchema.partial().merge(ElementIdSchema))
+        }).parse(args);
+        logger.info('Batch updating elements via MCP', { count: params.elements.length });
+
+        // One fetch to learn each element's actual type, so text→label
+        // conversion only applies to non-text shapes (same as update_element)
+        const allElements = await getElements();
+        const typeById = new Map(allElements.map(el => [el.id, el.type]));
+
+        const updates = params.elements.map(({ id, ...rest }) =>
+          prepareElementUpdate(id, rest, typeById.get(id))
+        );
+
+        const r = await batchUpdateElementsOnCanvas(updates);
+
+        const result = {
+          success: r.success,
+          updatedCount: r.count,
+          errors: r.errors,
+          elements: r.elements
+        };
+
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          ...(r.count === 0 && r.errors?.length ? { isError: true } : {})
+        };
+      }
+      case 'undo': {
+        logger.info('Undo via MCP');
+        // A 503 (no browser tab on this canvas) throws and becomes the
+        // normal MCP error path.
+        return {
+          content: [{ type: 'text', text: JSON.stringify(await undoOnCanvas(), null, 2) }]
+        };
+      }
+      case 'redo': {
+        logger.info('Redo via MCP');
+        return {
+          content: [{ type: 'text', text: JSON.stringify(await redoOnCanvas(), null, 2) }]
+        };
+      }
+      case 'get_canvas_url': {
+        // Pure: works even when the canvas server is down (no fetch)
+        return {
+          content: [{ type: 'text', text: `Canvas URL: ${canvasPageUrl()}` }]
         };
       }
       default:

@@ -1,5 +1,6 @@
 import type { Tool } from '@modelcontextprotocol/server';
 import { EXCALIDRAW_ELEMENT_TYPES } from '../types.js';
+import { LABEL_POSITIONS } from './label-position.js';
 
 // Tool definitions
 export const tools: Tool[] = [
@@ -27,6 +28,7 @@ export const tools: Tool[] = [
         text: { type: 'string' },
         fontSize: { type: 'number' },
         fontFamily: { type: ['string', 'number'], description: 'Font family: virgil/hand/handwritten (1), helvetica/sans/sans-serif (2), cascadia/mono/monospace (3), excalifont (5), nunito (6), lilita/lilita one (7), comic shanns/comic (8), or numeric ID' },
+        labelPosition: { type: 'string', enum: [...LABEL_POSITIONS], description: "'center' (default) = bound centered label; any other value = free-standing text element placed inside the shape at that corner/edge" },
         startElementId: { type: 'string', description: 'For arrows: ID of the element to bind the arrow start to. Arrow auto-routes to element edge.' },
         endElementId: { type: 'string', description: 'For arrows: ID of the element to bind the arrow end to. Arrow auto-routes to element edge.' },
         endArrowhead: { type: 'string', description: 'Arrowhead style at end: arrow, bar, dot, triangle, or null' },
@@ -268,6 +270,7 @@ export const tools: Tool[] = [
               text: { type: 'string' },
               fontSize: { type: 'number' },
               fontFamily: { type: ['string', 'number'], description: 'Font family: virgil/hand/handwritten (1), helvetica/sans/sans-serif (2), cascadia/mono/monospace (3), excalifont (5), nunito (6), lilita/lilita one (7), comic shanns/comic (8), or numeric ID' },
+              labelPosition: { type: 'string', enum: [...LABEL_POSITIONS], description: "'center' (default) = bound centered label; any other value = free-standing text element placed inside the shape at that corner/edge" },
               startElementId: { type: 'string', description: 'For arrows: ID of element to bind arrow start to' },
               endElementId: { type: 'string', description: 'For arrows: ID of element to bind arrow end to' },
               endArrowhead: { type: 'string', description: 'Arrowhead style at end: arrow, bar, dot, triangle, or null' },
@@ -479,6 +482,59 @@ export const tools: Tool[] = [
           description: 'Vertical scroll offset'
         }
       }
+    }
+  },
+  {
+    name: 'batch_update_elements',
+    description: 'Update multiple existing Excalidraw elements in one call. Each element must include an id and the fields to update.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        elements: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', description: 'ID of element to update' },
+              x: { type: 'number' },
+              y: { type: 'number' },
+              width: { type: 'number' },
+              height: { type: 'number' },
+              backgroundColor: { type: 'string' },
+              strokeColor: { type: 'string' },
+              strokeWidth: { type: 'number' },
+              strokeStyle: { type: 'string' },
+              roughness: { type: 'number' },
+              opacity: { type: 'number' },
+              text: { type: 'string' },
+              fontSize: { type: 'number' },
+              fontFamily: { type: ['string', 'number'] }
+            },
+            required: ['id']
+          },
+          description: 'Array of elements to update, each with id and fields to change'
+        }
+      },
+      required: ['elements']
+    }
+  },
+  {
+    name: 'undo',
+    description: 'Undo the last action on the canvas. Requires a browser frontend connection.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'redo',
+    description: 'Redo the last undone action on the canvas. Requires a browser frontend connection.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'get_canvas_url',
+    description: 'Get the URL to open this session\'s Excalidraw canvas in a browser.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      required: []
     }
   }
 ];

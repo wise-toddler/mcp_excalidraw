@@ -38,6 +38,17 @@ describe('ElementSchema', () => {
     expect(result.success).toBe(false);
   });
 
+  it('accepts labelPosition top-left and rejects unknown values', () => {
+    const ok = ElementSchema.safeParse({
+      type: 'rectangle', x: 0, y: 0, text: 'a', labelPosition: 'top-left',
+    });
+    expect(ok.success).toBe(true);
+    const bad = ElementSchema.safeParse({
+      type: 'rectangle', x: 0, y: 0, text: 'a', labelPosition: 'middle',
+    });
+    expect(bad.success).toBe(false);
+  });
+
   it('accepts optional fields', () => {
     const result = ElementSchema.safeParse({
       type: 'text',

@@ -1,6 +1,7 @@
 import path from 'path';
 import { generateId, ServerElement, normalizeFontFamily } from '../types.js';
 import { ALLOWED_EXPORT_DIRS } from './config.js';
+import { expandLabelPosition } from './label-position.js';
 
 // Safe file path validation to prevent path traversal attacks
 export function sanitizeFilePath(filePath: string): string {
@@ -98,6 +99,12 @@ export function prepareElement(elementData: ElementInput): ServerElement {
 
   // Convert text to label format for Excalidraw
   return convertTextToLabel(element);
+}
+
+// Prepare a batch of raw inputs: labelPosition expansion must run BEFORE
+// prepareElement so convertTextToLabel doesn't consume `text` first.
+export function prepareElements(inputs: ElementInput[]): ServerElement[] {
+  return inputs.flatMap(expandLabelPosition).map(prepareElement);
 }
 
 // Shared update-payload preparation (points, fontFamily, text→label,

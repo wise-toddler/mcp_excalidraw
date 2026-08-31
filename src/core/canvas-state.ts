@@ -33,5 +33,5 @@ export async function ensureCanvasReadyForMcpTool(): Promise<void> {
 }
 
 export function toolNeedsCanvasBeforeDispatch(name: string): boolean {
-  return name !== 'read_diagram_guide' && name !== 'get_resource';
+  return name !== 'read_diagram_guide' && name !== 'get_resource' && name !== 'get_canvas_url';
 }
