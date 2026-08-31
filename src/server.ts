@@ -8,9 +8,6 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import logger from './utils/logger.js';
 import {
-  elements,
-  files,
-  snapshots,
   generateId,
   EXCALIDRAW_ELEMENT_TYPES,
   ServerElement,
@@ -28,6 +25,18 @@ import {
 } from './types.js';
 import { z } from 'zod';
 import WebSocket from 'ws';
+import {
+  elements,
+  files,
+  snapshots,
+  canvases,
+  canvasContextMiddleware,
+  registerClient,
+  clientCanvasMap,
+  clientsForCanvas,
+  currentCanvasId,
+  runWithCanvas
+} from './canvases.js';
 import { normalizeLabel } from './core/normalize.js';
 import { isMainModule } from './core/entry.js';
 import { writePidFile, removePidFile } from './core/pidfile.js';
@@ -46,6 +55,9 @@ const wss = new WebSocketServer({ server });
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
+// Establish per-request canvas context (and '/' -> /canvases redirect)
+app.use(canvasContextMiddleware);
+
 // Serve static files from the build directory
 const staticDir = path.join(__dirname, '../dist');
 app.use(express.static(staticDir));
@@ -63,6 +75,8 @@ const clients = new Set<WebSocket>();
 function broadcast(message: WebSocketMessage): void {
   const data = JSON.stringify(message);
   clients.forEach(client => {
+    // Only deliver to clients viewing the current request's canvas
+    if ((clientCanvasMap.get(client) ?? 'default') !== currentCanvasId()) return;
     try {
       if (client.readyState === WebSocket.OPEN) {
         client.send(data);
@@ -81,7 +95,9 @@ function normalizeLineBreakMarkup(text: string): string {
 }
 
 // WebSocket connection handling
-wss.on('connection', (ws: WebSocket) => {
+wss.on('connection', (ws: WebSocket, req) => {
+  const canvasId = registerClient(ws, req);
+  runWithCanvas(canvasId, () => {
   clients.add(ws);
   logger.info('New WebSocket connection established');
 
@@ -111,6 +127,7 @@ wss.on('connection', (ws: WebSocket) => {
   ws.on('error', (error) => {
     logger.error('WebSocket error:', error);
     clients.delete(ws);
+  });
   });
 });
 
@@ -1289,6 +1306,9 @@ app.get('/health', (req: Request, res: Response) => {
     timestamp: new Date().toISOString(),
     elements_count: elements.size,
     websocket_clients: clients.size,
+    canvas_id: currentCanvasId(),
+    canvas_count: canvases.size,
+    canvas_clients: clientsForCanvas(currentCanvasId(), clients).length,
     // Identity for `stop`: it must only ever signal a process that both
     // identifies as this service AND self-reports its pid — never a pid
     // from a stale pidfile or an unrelated app squatting on the port.
