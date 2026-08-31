@@ -39,7 +39,7 @@ import {
   currentSceneVersion,
   bumpSceneVersion
 } from './canvases.js';
-import { normalizeLabel } from './core/normalize.js';
+import { normalizeLabel, rehydrateArrowRefs } from './core/normalize.js';
 import { ensureBrowserClient, canvasOpenUrl } from './browser-open.js';
 import { forkRoutes } from './canvas-routes.js';
 import { isMainModule } from './core/entry.js';
@@ -890,10 +890,14 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
     }
 
     // Collapse duplicate bound labels before the scene is overwritten (#15)
-    const { kept: incomingElements, droppedCount: dedupedCount } = dedupeBoundText(frontendElements);
+    const { kept: dedupedElements, droppedCount: dedupedCount } = dedupeBoundText(frontendElements);
     if (dedupedCount > 0) {
       logger.warn(`Dropped ${dedupedCount} duplicate bound-text element(s) during sync`);
     }
+
+    // Restore the start/end refs a .excalidraw scene only carries as
+    // startBinding/endBinding, so re-routing keeps following imported arrows (#14)
+    const incomingElements = rehydrateArrowRefs(dedupedElements);
 
     // Record element count before sync
     const beforeCount = elements.size;

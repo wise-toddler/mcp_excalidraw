@@ -484,7 +484,7 @@ Write paths must sit under `EXCALIDRAW_EXPORT_DIR` (`path.delimiter`-separated l
 
 This is how diagrams live in a repo: commit the `.excalidraw` file, and re-import + edit + re-export it when the architecture changes.
 
-> **⚠ import_scene caveat:** Exports now carry bound text and arrow bindings, so a round-trip keeps labels and looks correct. What does *not* survive: imported arrows keep their `startBinding`/`endBinding` metadata but lose the internal start/end references, so **server-side re-routing no longer follows them** — moving a bound shape after an import leaves the arrow where it was. Re-create the arrow (or drag the shape in the browser, which re-binds) if you need it to follow. Prefer keeping a generator script as source of truth over repeated round-trips.
+Round-trips are lossless for bindings: exports carry bound text and arrow `startBinding`/`endBinding`, and importing rebuilds the internal start/end references from them — so labels, bindings, and **server-side re-routing all survive**. Moving a bound shape after an import drags its arrows along, exactly as it does for arrows created in-session.
 
 ### Obsidian vaults: use `.excalidraw.md`
 

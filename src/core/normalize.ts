@@ -58,6 +58,27 @@ export function normalizeLabel(label: ServerElement['label']): ServerElement['la
   return ff !== undefined ? { ...label, fontFamily: ff } : label;
 }
 
+// Rehydrate the fork's `start`/`end` refs from Excalidraw's
+// `startBinding`/`endBinding` on an incoming scene. Exports (and any scene
+// authored on excalidraw.com) carry only the bindings, so without this an
+// imported arrow renders bound but behaves unbound on the server: the
+// re-routing that follows `start.id`/`end.id` stops dragging it along when a
+// bound shape is moved (#14). An explicit ref always wins, and a binding
+// pointing outside the scene is left untouched.
+export function rehydrateArrowRefs<T extends { id?: string; type?: string }>(sceneElements: T[]): T[] {
+  const ids = new Set(sceneElements.map(el => (el as any)?.id).filter(Boolean));
+  return sceneElements.map(el => {
+    const arrow = el as any;
+    if (!arrow || (arrow.type !== 'arrow' && arrow.type !== 'line')) return el;
+    const startId = arrow.startBinding?.elementId;
+    const endId = arrow.endBinding?.elementId;
+    const patch: Record<string, { id: string }> = {};
+    if (!arrow.start && startId && ids.has(startId)) patch.start = { id: startId };
+    if (!arrow.end && endId && ids.has(endId)) patch.end = { id: endId };
+    return Object.keys(patch).length > 0 ? { ...arrow, ...patch } : el;
+  });
+}
+
 export interface ElementInput {
   id?: string;
   type: string;

@@ -7,7 +7,7 @@ import {
   clearCanvas,
   batchCreateElementsOnCanvas
 } from './canvas-client.js';
-import { sanitizeFilePath } from './normalize.js';
+import { sanitizeFilePath, rehydrateArrowRefs } from './normalize.js';
 import { isObsidianExcalidrawMd, extractSceneJsonFromObsidianMd } from './obsidian-md.js';
 import { expandElementsForExport } from './expand-elements.js';
 
@@ -87,14 +87,15 @@ export async function importScene(options: {
     await clearCanvas();
   }
 
-  // Batch create the imported elements
-  const elementsToCreate = importElements.map(el => ({
+  // Batch create the imported elements, restoring the start/end refs the
+  // .excalidraw format only carries as startBinding/endBinding (#14)
+  const elementsToCreate = rehydrateArrowRefs(importElements.map(el => ({
     ...el,
     id: el.id || generateId(),
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     version: 1
-  }));
+  })));
 
   const created = await batchCreateElementsOnCanvas(elementsToCreate);
   if (!created) {
