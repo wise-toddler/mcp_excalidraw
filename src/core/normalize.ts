@@ -1,15 +1,17 @@
 import path from 'path';
 import { generateId, ServerElement, normalizeFontFamily } from '../types.js';
-import { ALLOWED_EXPORT_DIR } from './config.js';
+import { ALLOWED_EXPORT_DIRS } from './config.js';
 
 // Safe file path validation to prevent path traversal attacks
 export function sanitizeFilePath(filePath: string): string {
   const resolved = path.resolve(filePath);
-  const allowedDir = path.resolve(ALLOWED_EXPORT_DIR);
-  if (!resolved.startsWith(allowedDir + path.sep) && resolved !== allowedDir) {
+  const allowed = ALLOWED_EXPORT_DIRS.some(dir =>
+    resolved === dir || resolved.startsWith(dir + path.sep)
+  );
+  if (!allowed) {
     throw new Error(
-      `Path traversal blocked: "${filePath}" resolves outside the allowed directory "${allowedDir}". ` +
-      `Set EXCALIDRAW_EXPORT_DIR to change the allowed base directory.`
+      `Path traversal blocked: "${filePath}" resolves outside allowed directories. ` +
+      `Set EXCALIDRAW_EXPORT_DIR to add more allowed directories (${path.delimiter}-separated).`
     );
   }
   return resolved;
@@ -31,13 +33,28 @@ export function convertTextToLabel(element: ServerElement): ServerElement {
     if (element.type === 'text') {
       return element; // Keep text as direct property
     }
-    // For other elements (rectangle, ellipse, diamond), convert to label format
+    // For other elements (rectangle, ellipse, diamond), convert to label format.
+    // Propagate fontSize/fontFamily into the label — Excalidraw's convertToExcalidrawElements
+    // reads these from the label object, NOT the container shape. Without this the bound
+    // text renders at the default size regardless of the requested fontSize (issue #11).
+    const label: NonNullable<ServerElement['label']> = { text };
+    if (element.fontSize !== undefined) label.fontSize = element.fontSize as number;
+    const ff = normalizeFontFamily(element.fontFamily as any);
+    if (ff !== undefined) label.fontFamily = ff;
     return {
       ...rest,
-      label: { text }
+      label
     } as ServerElement;
   }
   return element;
+}
+
+// Normalize a label's fontFamily to the numeric value Excalidraw expects.
+// Direct REST callers may pass a string fontFamily (e.g. "helvetica") on the label.
+export function normalizeLabel(label: ServerElement['label']): ServerElement['label'] {
+  if (!label) return label;
+  const ff = normalizeFontFamily(label.fontFamily);
+  return ff !== undefined ? { ...label, fontFamily: ff } : label;
 }
 
 export interface ElementInput {
@@ -117,7 +134,12 @@ export function prepareElementUpdate(
   const effectiveType = (updates.type as string | undefined) ?? knownType;
   if (updatePayload.text !== undefined && effectiveType && effectiveType !== 'text') {
     const { text, ...withoutText } = updatePayload;
-    return { ...withoutText, label: { text } } as Partial<ServerElement> & { id: string };
+    // Propagate fontSize/fontFamily into the label (issue #11) so
+    // `update_element --fontSize` on a labelled shape resizes its text too.
+    const label: NonNullable<ServerElement['label']> = { text: text as string };
+    if (updatePayload.fontSize !== undefined) label.fontSize = updatePayload.fontSize as number;
+    if (updatePayload.fontFamily !== undefined) label.fontFamily = updatePayload.fontFamily;
+    return { ...withoutText, label } as Partial<ServerElement> & { id: string };
   }
 
   return updatePayload;

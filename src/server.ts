@@ -28,6 +28,7 @@ import {
 } from './types.js';
 import { z } from 'zod';
 import WebSocket from 'ws';
+import { normalizeLabel } from './core/normalize.js';
 import { isMainModule } from './core/entry.js';
 import { writePidFile, removePidFile } from './core/pidfile.js';
 
@@ -129,7 +130,9 @@ const CreateElementSchema = z.object({
   opacity: z.number().optional(),
   text: z.string().optional(),
   label: z.object({
-    text: z.string()
+    text: z.string(),
+    fontSize: z.number().optional(),
+    fontFamily: z.union([z.string(), z.number()]).optional()
   }).optional(),
   fontSize: z.number().optional(),
   fontFamily: z.union([z.string(), z.number()]).optional(),
@@ -195,7 +198,9 @@ const UpdateElementSchema = z.object({
   text: z.string().optional(),
   originalText: z.string().optional(),
   label: z.object({
-    text: z.string()
+    text: z.string(),
+    fontSize: z.number().optional(),
+    fontFamily: z.union([z.string(), z.number()]).optional()
   }).optional(),
   fontSize: z.number().optional(),
   fontFamily: z.union([z.string(), z.number()]).optional(),
@@ -271,6 +276,7 @@ app.get('/api/elements', (req: Request, res: Response) => {
 app.post('/api/elements', (req: Request, res: Response) => {
   try {
     const params = CreateElementSchema.parse(req.body);
+    if (params.label) params.label = normalizeLabel(params.label);
     logger.info('Creating element via API', { type: params.type });
 
     // Prioritize passed ID (for MCP sync), otherwise generate new ID
@@ -317,6 +323,7 @@ app.put('/api/elements/:id', (req: Request, res: Response) => {
     const { id } = req.params;
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const updates = UpdateElementSchema.parse({ id, ...body });
+    if (updates.label) updates.label = normalizeLabel(updates.label);
 
     if (!id) {
       return res.status(400).json({
@@ -698,6 +705,7 @@ app.post('/api/elements/batch', (req: Request, res: Response) => {
 
     elementsToCreate.forEach(elementData => {
       const params = CreateElementSchema.parse(elementData);
+      if (params.label) params.label = normalizeLabel(params.label);
       // Prioritize passed ID (for MCP sync), otherwise generate new ID
       const id = params.id || generateId();
       const element: ServerElement = {
@@ -1412,5 +1420,5 @@ if (isMainModule(import.meta.url)) {
   void startServer();
 }
 
-export { startServer };
+export { startServer, computeEdgePoint, CreateElementSchema, UpdateElementSchema };
 export default app;

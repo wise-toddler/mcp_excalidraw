@@ -46,7 +46,7 @@ const PointTupleSchema = z.tuple([z.number(), z.number()]);
 const PointSchema = z.union([PointObjectSchema, PointTupleSchema]);
 
 // Schema definitions using zod
-const ElementSchema = z.object({
+export const ElementSchema = z.object({
   id: z.string().optional(),
   type: z.enum(Object.values(EXCALIDRAW_ELEMENT_TYPES) as [ExcalidrawElementType, ...ExcalidrawElementType[]]),
   x: z.number(),
@@ -86,12 +86,12 @@ const GroupIdSchema = z.object({
   groupId: z.string()
 });
 
-const AlignElementsSchema = z.object({
+export const AlignElementsSchema = z.object({
   elementIds: z.array(z.string()),
   alignment: z.enum(['left', 'center', 'right', 'top', 'middle', 'bottom'])
 });
 
-const DistributeElementsSchema = z.object({
+export const DistributeElementsSchema = z.object({
   elementIds: z.array(z.string()),
   direction: z.enum(['horizontal', 'vertical'])
 });
