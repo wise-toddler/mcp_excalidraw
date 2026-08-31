@@ -77,6 +77,9 @@ interface WebSocketMessage {
   zoom?: number;
   offsetX?: number;
   offsetY?: number;
+  // Server scene version; echoed back as `baseVersion` on sync so a stale tab
+  // can be rejected instead of overwriting newer edits
+  sceneVersion?: number;
 }
 
 interface ApiResponse {
@@ -87,6 +90,9 @@ interface ApiResponse {
   count?: number;
   error?: string;
   message?: string;
+  sceneVersion?: number;
+  currentVersion?: number;
+  dedupedCount?: number;
 }
 
 type SyncStatus = 'idle' | 'syncing' | 'success' | 'error';
@@ -336,6 +342,11 @@ function App(): JSX.Element {
   const syncInFlightRef = useRef<boolean>(false)
   const suppressAutoSyncCountRef = useRef<number>(0)
   const userInteractedRef = useRef<boolean>(false)
+  // Newest server scene version this tab has seen; sent as `baseVersion` so the
+  // server can reject a sync from a tab holding a stale scene (#12/#15).
+  // Stays null until the server tells us one — then we sync without a
+  // baseVersion and the server keeps its pre-guard behaviour.
+  const sceneVersionRef = useRef<number | null>(null)
 
   const applySceneUpdateWithoutAutoSync = (
     api: ExcalidrawImperativeAPI,
@@ -454,6 +465,12 @@ function App(): JSX.Element {
   }
 
   const handleWebSocketMessage = async (data: WebSocketMessage): Promise<void> => {
+    // Every server broadcast carries the canvas scene version — record it even
+    // if we can't apply the message yet.
+    if (typeof data.sceneVersion === 'number') {
+      sceneVersionRef.current = data.sceneVersion
+    }
+
     const excalidrawAPI = excalidrawAPIRef.current
     if (!excalidrawAPI) {
       return
@@ -866,12 +883,16 @@ function App(): JSX.Element {
         },
         body: JSON.stringify({
           elements: backendElements,
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
+          ...(sceneVersionRef.current !== null ? { baseVersion: sceneVersionRef.current } : {})
         })
       })
 
       if (response.ok) {
         const result: ApiResponse = await response.json()
+        if (typeof result.sceneVersion === 'number') {
+          sceneVersionRef.current = result.sceneVersion
+        }
         setLastSyncTime(new Date())
         console.log(`Sync successful: ${result.count} elements synced`)
 
@@ -879,6 +900,18 @@ function App(): JSX.Element {
           setSyncStatus('success')
           // Reset status after 2 seconds
           setTimeout(() => setSyncStatus('idle'), 2000)
+        }
+      } else if (response.status === 409) {
+        // This tab's scene predates the server's — never re-push it, or the
+        // newer edits would be overwritten (#12). Catch up instead.
+        const stale: ApiResponse = await response.json()
+        if (typeof stale.currentVersion === 'number') {
+          sceneVersionRef.current = stale.currentVersion
+        }
+        console.warn('Sync rejected as stale; reloading scene from server')
+        await loadExistingElements()
+        if (!silent) {
+          setSyncStatus('idle')
         }
       } else {
         const error: ApiResponse = await response.json()

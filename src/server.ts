@@ -35,7 +35,9 @@ import {
   clientCanvasMap,
   clientsForCanvas,
   currentCanvasId,
-  runWithCanvas
+  runWithCanvas,
+  currentSceneVersion,
+  bumpSceneVersion
 } from './canvases.js';
 import { normalizeLabel } from './core/normalize.js';
 import { ensureBrowserClient, canvasOpenUrl } from './browser-open.js';
@@ -75,7 +77,9 @@ const clients = new Set<WebSocket>();
 
 // Broadcast to all connected clients
 function broadcast(message: WebSocketMessage): void {
-  const data = JSON.stringify(message);
+  // Stamp the canvas's scene version on every broadcast; the frontend echoes
+  // the newest one it saw back as `baseVersion` on sync (#12/#15).
+  const data = JSON.stringify({ ...message, sceneVersion: currentSceneVersion() });
   clients.forEach(client => {
     // Only deliver to clients viewing the current request's canvas
     if ((clientCanvasMap.get(client) ?? 'default') !== currentCanvasId()) return;
@@ -109,6 +113,7 @@ wss.on('connection', (ws: WebSocket, req) => {
   const initialMessage: InitialElementsMessage & { files?: Record<string, ExcalidrawFile> } = {
     type: 'initial_elements',
     elements: Array.from(elements.values()),
+    sceneVersion: currentSceneVersion(),
     ...(files.size > 0 ? { files: filesObj } : {})
   };
   ws.send(JSON.stringify(initialMessage));
@@ -315,6 +320,7 @@ app.post('/api/elements', (req: Request, res: Response) => {
     }
 
     elements.set(id, element);
+    bumpSceneVersion();
 
     // Broadcast to all connected clients
     const message: ElementCreatedMessage = {
@@ -392,6 +398,7 @@ app.put('/api/elements/:id', (req: Request, res: Response) => {
     }
 
     elements.set(id, updatedElement);
+    bumpSceneVersion();
 
     // Broadcast to all connected clients
     const message: ElementUpdatedMessage = {
@@ -427,6 +434,7 @@ app.delete('/api/elements/clear', (req: Request, res: Response) => {
   try {
     const count = elements.size;
     elements.clear();
+    bumpSceneVersion();
 
     broadcast({
       type: 'canvas_cleared',
@@ -469,6 +477,7 @@ app.delete('/api/elements/:id', (req: Request, res: Response) => {
     }
 
     elements.delete(id);
+    bumpSceneVersion();
 
     // Broadcast to all connected clients
     const message: ElementDeletedMessage = {
@@ -744,6 +753,7 @@ app.post('/api/elements/batch', (req: Request, res: Response) => {
 
     // Store all elements after binding resolution
     createdElements.forEach(el => elements.set(el.id, el));
+    bumpSceneVersion();
 
     // Broadcast to all connected clients
     const message: BatchCreatedMessage = {
@@ -783,6 +793,10 @@ app.post('/api/elements/from-mermaid', (req: Request, res: Response) => {
       hasConfig: !!config
     });
 
+    // The converting client syncs the new elements back, so any other tab's
+    // in-flight scene is already out of date — bump before broadcasting.
+    bumpSceneVersion();
+
     // Broadcast to all WebSocket clients to process the Mermaid diagram
     broadcast({
       type: 'mermaid_convert',
@@ -807,10 +821,44 @@ app.post('/api/elements/from-mermaid', (req: Request, res: Response) => {
   }
 });
 
+// Drop duplicate bound-text elements: a stale tab can re-inject a second text
+// element bound to the same container, stacking labels and inflating element
+// counts (#15). Keep the text the container's boundElements points at; if none
+// matches, keep the last one seen (the freshest in scene order).
+function dedupeBoundText(incoming: any[]): { kept: any[]; droppedCount: number } {
+  const textsByContainer = new Map<string, any[]>();
+  for (const el of incoming) {
+    if (el && el.type === 'text' && typeof el.containerId === 'string' && el.containerId) {
+      const group = textsByContainer.get(el.containerId) ?? [];
+      group.push(el);
+      textsByContainer.set(el.containerId, group);
+    }
+  }
+
+  const drop = new Set<any>();
+  for (const [containerId, texts] of textsByContainer) {
+    if (texts.length < 2) continue;
+    const container = incoming.find(el => el && el.id === containerId);
+    const boundIds = new Set(
+      (Array.isArray(container?.boundElements) ? container.boundElements : [])
+        .filter((b: any) => b && b.type === 'text' && b.id)
+        .map((b: any) => b.id)
+    );
+    const bound = texts.filter(t => boundIds.has(t.id));
+    const keep = bound.length > 0 ? bound[bound.length - 1] : texts[texts.length - 1];
+    for (const text of texts) {
+      if (text !== keep) drop.add(text);
+    }
+  }
+
+  if (drop.size === 0) return { kept: incoming, droppedCount: 0 };
+  return { kept: incoming.filter(el => !drop.has(el)), droppedCount: drop.size };
+}
+
 // Sync elements from frontend (overwrite sync)
 app.post('/api/elements/sync', (req: Request, res: Response) => {
   try {
-    const { elements: frontendElements, timestamp } = req.body;
+    const { elements: frontendElements, timestamp, baseVersion } = req.body;
 
     logger.info(`Sync request received: ${frontendElements.length} elements`, {
       timestamp,
@@ -825,6 +873,28 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
       });
     }
 
+    // Last-writer guard: a tab whose scene predates the newest server-side
+    // mutation must not overwrite it (#12). Requests without a numeric
+    // baseVersion (curl, older frontends) keep the previous overwrite
+    // behaviour for back-compat.
+    const serverVersion = currentSceneVersion();
+    if (typeof baseVersion === 'number' && baseVersion < serverVersion) {
+      logger.warn(
+        `Rejected stale sync: baseVersion ${baseVersion} < sceneVersion ${serverVersion}`
+      );
+      return res.status(409).json({
+        success: false,
+        error: 'stale sync rejected',
+        currentVersion: serverVersion
+      });
+    }
+
+    // Collapse duplicate bound labels before the scene is overwritten (#15)
+    const { kept: incomingElements, droppedCount: dedupedCount } = dedupeBoundText(frontendElements);
+    if (dedupedCount > 0) {
+      logger.warn(`Dropped ${dedupedCount} duplicate bound-text element(s) during sync`);
+    }
+
     // Record element count before sync
     const beforeCount = elements.size;
 
@@ -836,7 +906,7 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
     let successCount = 0;
     const processedElements: ServerElement[] = [];
 
-    frontendElements.forEach((element: any, index: number) => {
+    incomingElements.forEach((element: any, index: number) => {
       try {
         // Ensure element has ID, generate one if missing
         const elementId = element.id || generateId();
@@ -861,7 +931,9 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
       }
     });
 
-    logger.info(`Sync completed: ${successCount}/${frontendElements.length} elements synced`);
+    logger.info(`Sync completed: ${successCount}/${incomingElements.length} elements synced`);
+
+    const newVersion = bumpSceneVersion();
 
     // 3. Broadcast sync event to all WebSocket clients
     broadcast({
@@ -878,7 +950,9 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
       count: successCount,
       syncedAt: new Date().toISOString(),
       beforeCount,
-      afterCount: elements.size
+      afterCount: elements.size,
+      sceneVersion: newVersion,
+      dedupedCount
     });
 
   } catch (error) {
@@ -908,6 +982,7 @@ app.post('/api/files', (req: Request, res: Response) => {
       files.set(f.id, { id: f.id, dataURL: f.dataURL, mimeType: f.mimeType || 'image/png', created: f.created || Date.now() });
     }
   }
+  bumpSceneVersion();
   // Broadcast files to connected clients
   broadcast({ type: 'files_added', files: fileList });
   res.json({ success: true, count: fileList.length });
@@ -917,6 +992,7 @@ app.post('/api/files', (req: Request, res: Response) => {
 app.delete('/api/files/:id', (req: Request, res: Response) => {
   const id = req.params.id as string;
   if (files.delete(id)) {
+    bumpSceneVersion();
     broadcast({ type: 'file_deleted', fileId: id });
     res.json({ success: true });
   } else {

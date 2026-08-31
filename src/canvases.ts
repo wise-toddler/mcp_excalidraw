@@ -29,6 +29,11 @@ export interface Canvas {
   snapshots: Map<string, Snapshot>;
   createdAt: string;
   lastAccessedAt: string;
+  // Monotonic counter bumped by every server-side scene mutation. Clients echo
+  // the last version they saw as `baseVersion` on POST /api/elements/sync, so a
+  // tab holding a stale scene can be rejected instead of overwriting newer
+  // edits (#12) — see the last-writer guard in the sync route.
+  sceneVersion: number;
 }
 
 // All canvases — "default" is created on startup
@@ -42,6 +47,7 @@ canvases.set('default', {
   snapshots: defaultSnapshots,
   createdAt: new Date().toISOString(),
   lastAccessedAt: new Date().toISOString(),
+  sceneVersion: 0,
 });
 
 // Get or create a canvas by ID
@@ -55,6 +61,7 @@ export function getCanvas(canvasId: string = 'default'): Canvas {
       snapshots: new Map(),
       createdAt: new Date().toISOString(),
       lastAccessedAt: new Date().toISOString(),
+      sceneVersion: 0,
     };
     canvases.set(canvasId, canvas);
   }
@@ -85,6 +92,20 @@ function scoped<K, V>(pick: (c: Canvas) => Map<K, V>): Map<K, V> {
 export const elements = scoped(c => c.elements);
 export const files = scoped(c => c.files);
 export const snapshots = scoped(c => c.snapshots);
+
+// ─── Scene version (last-writer guard) ────────────────────────
+// Read the current canvas's scene version (0 for a canvas never mutated).
+export function currentSceneVersion(canvasId: string = currentCanvasId()): number {
+  return canvases.get(canvasId)?.sceneVersion ?? 0;
+}
+
+// Bump on every server-side scene mutation; call before broadcasting so the
+// message carries the new version.
+export function bumpSceneVersion(canvasId: string = currentCanvasId()): number {
+  const canvas = getCanvas(canvasId);
+  canvas.sceneVersion += 1;
+  return canvas.sceneVersion;
+}
 
 // Extract canvasId from query param or header, default to 'default'
 // (structural req type so it is testable without express)

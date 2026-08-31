@@ -17,7 +17,8 @@ import {
   canvases,
   getCanvas,
   currentCanvasId,
-  closeCanvasClients
+  closeCanvasClients,
+  bumpSceneVersion
 } from './canvases.js';
 import { normalizeLabel } from './core/normalize.js';
 import { renderCanvasDashboard, CanvasSummary } from './core/canvas-dashboard.js';
@@ -140,6 +141,8 @@ export function forkRoutes(deps: ForkRouteDeps): Router {
           reroutedArrows.push(...deps.rerouteBoundArrows(parsed.id));
         }
       }
+
+      if (updatedElements.length > 0) bumpSceneVersion();
 
       // Broadcast updates
       for (const el of [...updatedElements, ...reroutedArrows]) {
