@@ -120,6 +120,49 @@ describe('Elements API', () => {
     expect(res.body.elements).toHaveLength(2);
   });
 
+  it('POST /api/elements/batch-update updates and reports errors', async () => {
+    const c1 = await request(app).post('/api/elements').send({ type: 'rectangle', x: 0, y: 0 });
+    const id1 = c1.body.element.id;
+
+    const res = await request(app)
+      .post('/api/elements/batch-update')
+      .send({
+        elements: [
+          { id: id1, x: 999 },
+          { id: 'nonexistent', x: 0 },
+        ],
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.count).toBe(1);
+    expect(res.body.errors).toBeDefined();
+    expect(res.body.errors).toContain('Element nonexistent not found');
+  });
+
+  it('POST /api/elements/batch-update moving a shape reroutes its bound arrow', async () => {
+    const created = await request(app)
+      .post('/api/elements/batch')
+      .send({
+        elements: [
+          { id: 'rectA', type: 'rectangle', x: 0, y: 0, width: 100, height: 60 },
+          { id: 'rectB', type: 'rectangle', x: 400, y: 0, width: 100, height: 60 },
+          { id: 'arrow1', type: 'arrow', x: 0, y: 0, start: { id: 'rectA' }, end: { id: 'rectB' } },
+        ],
+      });
+    expect(created.status).toBe(200);
+    const arrowBefore = created.body.elements.find((e: any) => e.id === 'arrow1');
+
+    const res = await request(app)
+      .post('/api/elements/batch-update')
+      .send({ elements: [{ id: 'rectA', x: 300 }] });
+    expect(res.status).toBe(200);
+    expect(res.body.count).toBe(1);
+
+    const arrowAfter = await request(app).get('/api/elements/arrow1');
+    expect(arrowAfter.status).toBe(200);
+    expect(arrowAfter.body.element.x).not.toBe(arrowBefore.x);
+    expect(arrowAfter.body.element.version).toBeGreaterThan(arrowBefore.version);
+  });
+
   it('POST /api/elements/sync syncs from frontend', async () => {
     await request(app).post('/api/elements').send({ type: 'rectangle', x: 0, y: 0 });
 
@@ -186,6 +229,98 @@ describe('Canvas isolation', () => {
     const res = await request(app).get('/api/elements/search?type=rectangle&canvasId=iso');
     expect(res.status).toBe(200);
     expect(res.body.count).toBe(1);
+  });
+});
+
+// ─── Canvases ─────────────────────────────────────────────────
+describe('Canvases API', () => {
+  it('POST /api/canvases creates canvas', async () => {
+    const res = await request(app)
+      .post('/api/canvases')
+      .send({ id: 'test-canvas' });
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.canvas.id).toBe('test-canvas');
+  });
+
+  it('GET /api/canvases lists canvases', async () => {
+    await request(app).post('/api/canvases').send({ id: 'c1' });
+    const res = await request(app).get('/api/canvases');
+    expect(res.status).toBe(200);
+    expect(res.body.canvases.length).toBeGreaterThanOrEqual(2); // default + c1
+  });
+
+  it('DELETE /api/canvases/:id deletes canvas', async () => {
+    await request(app).post('/api/canvases').send({ id: 'to-delete' });
+    const res = await request(app).delete('/api/canvases/to-delete');
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+
+  it('DELETE /api/canvases/default should fail', async () => {
+    const res = await request(app).delete('/api/canvases/default');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('Cannot delete the default canvas');
+  });
+
+  it('POST /api/canvases duplicate returns 409', async () => {
+    await request(app).post('/api/canvases').send({ id: 'dup' });
+    const res = await request(app).post('/api/canvases').send({ id: 'dup' });
+    expect(res.status).toBe(409);
+  });
+
+  it('DELETE /api/canvases/:id on a canvas with elements removes it from the list', async () => {
+    await request(app)
+      .post('/api/elements?canvasId=full-canvas')
+      .send({ type: 'rectangle', x: 0, y: 0 });
+
+    const del = await request(app).delete('/api/canvases/full-canvas');
+    expect(del.status).toBe(200);
+
+    const list = await request(app).get('/api/canvases');
+    expect(list.body.canvases.map((c: any) => c.id)).not.toContain('full-canvas');
+  });
+
+  it('GET /canvases returns HTML', async () => {
+    const res = await request(app).get('/canvases');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('html');
+    expect(res.text).toContain('Excalidraw Canvases');
+  });
+
+  it('GET / redirects to /canvases', async () => {
+    const res = await request(app).get('/');
+    expect(res.status).toBe(302);
+    expect(res.headers['location']).toBe('/canvases');
+  });
+});
+
+// ─── History (undo/redo) ──────────────────────────────────────
+describe('History API', () => {
+  it('POST /api/undo with no clients returns 503 with canvas URL', async () => {
+    const res = await request(app).post('/api/undo?canvasId=s1');
+    expect(res.status).toBe(503);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toContain('?canvasId=');
+  });
+
+  it('POST /api/redo with no clients returns 503', async () => {
+    const res = await request(app).post('/api/redo');
+    expect(res.status).toBe(503);
+    expect(res.body.success).toBe(false);
+  });
+
+  it('POST /api/history/result without requestId returns 400', async () => {
+    const res = await request(app).post('/api/history/result').send({});
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/history/result with unknown requestId returns 200', async () => {
+    const res = await request(app)
+      .post('/api/history/result')
+      .send({ requestId: 'unknown-id', success: true });
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
   });
 });
 
@@ -320,5 +455,10 @@ describe('Edge cases', () => {
       .post('/api/snapshots')
       .send({});
     expect(res.status).toBe(400);
+  });
+
+  it('delete nonexistent canvas returns 404', async () => {
+    const res = await request(app).delete('/api/canvases/ghost');
+    expect(res.status).toBe(404);
   });
 });

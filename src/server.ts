@@ -38,6 +38,7 @@ import {
   runWithCanvas
 } from './canvases.js';
 import { normalizeLabel } from './core/normalize.js';
+import { forkRoutes } from './canvas-routes.js';
 import { isMainModule } from './core/entry.js';
 import { writePidFile, removePidFile } from './core/pidfile.js';
 
@@ -1330,6 +1331,19 @@ app.get('/api/sync/status', (req: Request, res: Response) => {
     websocketClients: clients.size
   });
 });
+
+// Fork-only routes: canvases API + dashboard, batch-update, undo/redo history.
+// Deps are injected to avoid a circular import; HOST/PORT are declared below
+// but only read at request time, and the function declarations are hoisted.
+app.use(forkRoutes({
+  broadcast,
+  clients,
+  wss,
+  rerouteBoundArrows,
+  UpdateElementSchema,
+  pageUrl: id => `http://${formatHostForUrl(HOST)}:${PORT}/?canvasId=${encodeURIComponent(id)}`,
+  ensureClient: async id => clientsForCanvas(id, clients).length > 0
+}));
 
 // Error handling middleware
 app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
